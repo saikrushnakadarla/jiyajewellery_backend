@@ -11,10 +11,16 @@ app.use(cors());
 app.use(express.json());
 
 // Import user routes
-const userRoutes = require('./routes/userRoutes'); // make sure this path is correct
+const userRoutes = require('./routes/userRoutes'); 
+const purityRoutes = require('./routes/purityRoutes');
+const metalTypeRoutes = require('./routes/metalTypeRoutes');
+const designMasterRoutes = require('./routes/designMasterRoutes');
 
 // Use routes
 app.use('/', userRoutes);
+app.use('/', purityRoutes);
+app.use('/', metalTypeRoutes);
+app.use('/', designMasterRoutes);
 
 // Default route
 app.get('/', (req, res) => {
