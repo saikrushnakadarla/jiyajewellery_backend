@@ -1,5 +1,5 @@
 const express = require('express');
-const db = require('./../db'); // your db.js
+const db = require('../db'); // your db.js
 const router = express.Router();
 
 
@@ -47,7 +47,6 @@ router.post('/post/category', async (req, res) => {
         res.status(500).json({ message: 'Database error' });
     }
 });
-
 
 router.get('/get/category', async (req, res) => {
     try {
@@ -132,7 +131,6 @@ router.put('/put/category/:category_id', async (req, res) => {
         res.status(500).json({ message: 'Database error' });
     }
 });
-
 
 router.delete('/delete/category/:category_id', async (req, res) => {
     const { category_id } = req.params;
