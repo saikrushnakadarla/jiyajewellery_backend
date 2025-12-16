@@ -12,11 +12,12 @@ router.post('/post/category', async (req, res) => {
             : parseInt(value, 10);
 
     const opening_qty = sanitizeInteger(categoryData.opening_qty, 0);
-    const sale_qty = sanitizeInteger(categoryData.sale_qty, 0); // default 0
+    const sale_qty = sanitizeInteger(categoryData.sale_qty, 0);
     const balance_qty = opening_qty - sale_qty;
 
     const values = [
         categoryData.category_name,
+        categoryData.prefix,                 
         categoryData.rbarcode,
         sanitizeInteger(categoryData.metal_type_id, null),
         categoryData.metal_type,
@@ -30,10 +31,18 @@ router.post('/post/category', async (req, res) => {
 
     const sql = `
         INSERT INTO category (
-            category_name, rbarcode, metal_type_id, metal_type,
-            tax_slab_id, tax_slab, hsn_code,
-            opening_qty, sale_qty, balance_qty
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            category_name,
+            prefix,                          
+            rbarcode,
+            metal_type_id,
+            metal_type,
+            tax_slab_id,
+            tax_slab,
+            hsn_code,
+            opening_qty,
+            sale_qty,
+            balance_qty
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     try {
@@ -47,6 +56,7 @@ router.post('/post/category', async (req, res) => {
         res.status(500).json({ message: 'Database error' });
     }
 });
+
 
 router.get('/get/category', async (req, res) => {
     try {
@@ -100,6 +110,7 @@ router.put('/put/category/:category_id', async (req, res) => {
             data.rbarcode,
             sanitizeInteger(data.metal_type_id, null),
             data.metal_type,
+            data.prefix,
             sanitizeInteger(data.tax_slab_id, null),
             data.tax_slab,
             data.hsn_code,
@@ -114,6 +125,7 @@ router.put('/put/category/:category_id', async (req, res) => {
                 rbarcode = ?, 
                 metal_type_id = ?, 
                 metal_type = ?, 
+                prefix = ?,
                 tax_slab_id = ?, 
                 tax_slab = ?, 
                 hsn_code = ?, 
