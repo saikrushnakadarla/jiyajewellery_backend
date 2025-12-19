@@ -35,7 +35,7 @@ router.get('/purity', async (req, res) => {
 router.get('/purity/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const [results] = await db.query('SELECT * FROM purity WHERE purity_id = ?', [id]);
+    const [results] = await db.query('SELECT * FROM purity WHERE id = ?', [id]);
     if (results.length === 0) return res.status(404).json({ error: 'Record not found' });
 
     res.status(200).json(results[0]);
@@ -53,7 +53,7 @@ router.put('/purity/:id', async (req, res) => {
     const [result] = await db.query(`
       UPDATE purity SET
         name = ?, metal = ?, purity_percentage = ?
-      WHERE purity_id = ?
+      WHERE id = ?
     `, [name, metal, purity_percentage, id]);
 
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Record not found' });
@@ -68,7 +68,7 @@ router.put('/purity/:id', async (req, res) => {
 router.delete('/purity/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const [result] = await db.query('DELETE FROM purity WHERE purity_id = ?', [id]);
+    const [result] = await db.query('DELETE FROM purity WHERE id = ?', [id]);
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Record not found' });
 
     res.status(200).json({ message: 'Purity record deleted' });

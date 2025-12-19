@@ -37,7 +37,7 @@ router.get('/metaltype', async (req, res) => {
 router.get('/metaltype/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const [results] = await db.query('SELECT * FROM metaltype WHERE metal_type_id = ?', [id]);
+    const [results] = await db.query('SELECT * FROM metaltype WHERE id = ?', [id]);
     if (results.length === 0) return res.status(404).json({ error: 'Record not found' });
 
     res.status(200).json(results[0]);
@@ -57,7 +57,7 @@ router.put('/metaltype/:id', async (req, res) => {
     const [result] = await db.query(`
       UPDATE metaltype
       SET metal_name = ?, default_purity = ?
-      WHERE metal_type_id = ?
+      WHERE id = ?
     `, [
       data.metal_name,
       formatValue(data.default_purity),
@@ -76,7 +76,7 @@ router.put('/metaltype/:id', async (req, res) => {
 router.delete('/metaltype/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const [result] = await db.query('DELETE FROM metaltype WHERE metal_type_id = ?', [id]);
+    const [result] = await db.query('DELETE FROM metaltype WHERE id = ?', [id]);
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Record not found' });
 
     res.status(200).json({ message: 'MetalType record deleted' });
