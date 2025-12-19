@@ -36,7 +36,7 @@ router.get('/designmaster', async (req, res) => {
 router.get('/designmaster/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const [results] = await db.query('SELECT * FROM designmaster WHERE design_id = ?', [id]);
+    const [results] = await db.query('SELECT * FROM designmaster WHERE id = ?', [id]);
     if (results.length === 0) return res.status(404).json({ error: 'Record not found' });
     res.status(200).json(results[0]);
   } catch (err) {
@@ -54,7 +54,7 @@ router.put('/designmaster/:id', async (req, res) => {
     const [result] = await db.query(`
       UPDATE designmaster
       SET metal = ?, design_name = ?
-      WHERE design_id = ?
+      WHERE id = ?
     `, [
       data.metal,
       data.design_name,
@@ -73,7 +73,7 @@ router.put('/designmaster/:id', async (req, res) => {
 router.delete('/designmaster/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const [result] = await db.query('DELETE FROM designmaster WHERE design_id = ?', [id]);
+    const [result] = await db.query('DELETE FROM designmaster WHERE id = ?', [id]);
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Record not found' });
 
     res.status(200).json({ message: 'DesignMaster record deleted' });
