@@ -57,12 +57,12 @@ router.get('/get/products', async (req, res) => {
   }
 });
 
-router.get('/get/product/:id', async (req, res) => {
+router.get('/get/product/:product_id', async (req, res) => {
   const { product_id } = req.params;
 
   try {
     const [[product]] = await db.query(
-      `SELECT * FROM product WHERE id = ?`,
+      `SELECT * FROM product WHERE product_id = ?`,
       [product_id]
     );
 
@@ -104,7 +104,7 @@ router.put('/put/product/:product_id', async (req, res) => {
       purity_id = ?, purity = ?,
       design_id = ?, design = ?,
       gross_wt = ?, stone_wt = ?, net_wt = ?
-    WHERE id = ?
+    WHERE product_id = ?
   `;
 
   try {
@@ -126,7 +126,7 @@ router.delete('/delete/product/:product_id', async (req, res) => {
 
   try {
     const [result] = await db.query(
-      `DELETE FROM product WHERE id = ?`,
+      `DELETE FROM product WHERE product_id = ?`,
       [product_id]
     );
 
