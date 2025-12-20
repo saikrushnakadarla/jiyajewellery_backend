@@ -1,8 +1,8 @@
 const express = require('express');
-const db = require('../db');
+const db = require('../db'); // your db.js
 const router = express.Router();
 
-// Add category
+
 router.post('/post/category', async (req, res) => {
     const categoryData = req.body;
 
@@ -57,7 +57,7 @@ router.post('/post/category', async (req, res) => {
     }
 });
 
-// Get all categories
+
 router.get('/get/category', async (req, res) => {
     try {
         const [results] = await db.query('SELECT * FROM category');
@@ -68,7 +68,6 @@ router.get('/get/category', async (req, res) => {
     }
 });
 
-// Get category by ID
 router.get('/get/category/:id', async (req, res) => {
     const { id } = req.params;
     try {
@@ -81,7 +80,6 @@ router.get('/get/category/:id', async (req, res) => {
     }
 });
 
-// Update category
 router.put('/put/category/:category_id', async (req, res) => {
     const { category_id } = req.params;
     const data = req.body;
@@ -92,6 +90,7 @@ router.put('/put/category/:category_id', async (req, res) => {
             : parseInt(value, 10);
 
     try {
+        // 1️⃣ Get existing sale_qty
         const [[existing]] = await db.query(
             `SELECT sale_qty FROM category WHERE category_id = ?`,
             [category_id]
@@ -105,6 +104,7 @@ router.put('/put/category/:category_id', async (req, res) => {
         const sale_qty = sanitizeInteger(existing.sale_qty, 0);
         const balance_qty = opening_qty - sale_qty;
 
+        // 2️⃣ Update category
         const values = [
             data.category_name,
             data.rbarcode,
@@ -135,6 +135,7 @@ router.put('/put/category/:category_id', async (req, res) => {
         `;
 
         const [result] = await db.query(sql, values);
+
         res.status(200).json({ message: 'Category updated successfully' });
 
     } catch (err) {
@@ -143,7 +144,6 @@ router.put('/put/category/:category_id', async (req, res) => {
     }
 });
 
-// Delete category
 router.delete('/delete/category/:category_id', async (req, res) => {
     const { category_id } = req.params;
     try {
@@ -156,7 +156,6 @@ router.delete('/delete/category/:category_id', async (req, res) => {
     }
 });
 
-// Check if category exists
 router.post('/api/check-and-insert', async (req, res) => {
     const { category_name, metal_type } = req.body;
 
@@ -171,9 +170,11 @@ router.post('/api/check-and-insert', async (req, res) => {
         );
 
         if (existingProducts.length > 0) {
+            // Category exists — no insertion here
             return res.json({ exists: true, message: 'Category already exists!' });
         }
 
+        // Category does not exist
         return res.json({ exists: false, message: 'Category does not exist.' });
     } catch (err) {
         console.error('Error in category operation:', err);
@@ -181,37 +182,6 @@ router.post('/api/check-and-insert', async (req, res) => {
     }
 });
 
-// Get next barcode for a specific prefix
-router.get('/getNextBarcodeByPrefix', async (req, res) => {
-    try {
-        const { prefix } = req.query;
-
-        if (!prefix) {
-            return res.status(400).json({ error: "Prefix is required" });
-        }
-
-        // First, check in products table for the last barcode with this prefix
-        const productSql = `SELECT barcode FROM product WHERE barcode LIKE ? ORDER BY barcode DESC LIMIT 1`;
-        const [productResults] = await db.query(productSql, [`${prefix}%`]);
-
-        let nextCode;
-        if (productResults.length > 0) {
-            const lastCode = productResults[0].barcode;
-            // Extract numeric part after the prefix
-            const numericPart = parseInt(lastCode.slice(prefix.length)) || 0;
-            nextCode = `${prefix}${String(numericPart + 1).padStart(3, '0')}`;
-        } else {
-            nextCode = `${prefix}001`;
-        }
-
-        res.status(200).json({ nextBarcode: nextCode });
-    } catch (err) {
-        console.error("Database error:", err);
-        res.status(500).json({ error: "Database query failed", details: err });
-    }
-});
-
-// Get last rbarcode (deprecated - kept for backward compatibility)
 router.get('/last-rbarcode', async (req, res) => {
     try {
         const [result] = await db.query("SELECT rbarcode FROM category WHERE rbarcode LIKE 'RB%' ORDER BY category_id DESC");
@@ -231,17 +201,6 @@ router.get('/last-rbarcode', async (req, res) => {
     }
 });
 
-// Get category by name (for frontend to get prefix)
-router.get('/get/category-by-name/:category_name', async (req, res) => {
-    const { category_name } = req.params;
-    try {
-        const [results] = await db.query('SELECT * FROM category WHERE category_name = ?', [category_name]);
-        if (results.length === 0) return res.status(404).json({ message: 'Category not found' });
-        res.status(200).json(results[0]);
-    } catch (err) {
-        console.error('Error fetching category by name:', err);
-        res.status(500).json({ message: 'Database error', error: err });
-    }
-});
+
 
 module.exports = router;

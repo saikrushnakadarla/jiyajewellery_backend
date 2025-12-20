@@ -17,6 +17,7 @@ const metalTypeRoutes = require('./routes/metalTypeRoutes');
 const designMasterRoutes = require('./routes/designMasterRoutes');
 const categoryRoutes = require('./routes/categoryRoutes'); 
 const productRoutes = require('./routes/productRoutes');
+const estimateRoutes = require('./routes/estimateRoutes');
 
 // Use routes
 app.use('/', userRoutes);
@@ -25,6 +26,7 @@ app.use('/', metalTypeRoutes);
 app.use('/', designMasterRoutes);
 app.use('/', categoryRoutes);
 app.use('/', productRoutes);
+app.use('/', estimateRoutes);
 
 // Default route
 app.get('/', (req, res) => {
