@@ -18,10 +18,12 @@ const designMasterRoutes = require('./routes/designMasterRoutes');
 const categoryRoutes = require('./routes/categoryRoutes'); 
 const productRoutes = require('./routes/productRoutes');
 const estimateRoutes = require('./routes/estimateRoutes');
+const ratesRoutes = require('./routes/ratesRoutes');
 
 // Use routes
 app.use('/', userRoutes);
 app.use('/', purityRoutes);
+app.use('/', ratesRoutes);
 app.use('/', metalTypeRoutes);
 app.use('/', designMasterRoutes);
 app.use('/', categoryRoutes);
