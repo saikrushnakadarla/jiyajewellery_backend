@@ -1,5 +1,5 @@
 const express = require('express');
-const db = require('../db'); // your db.js
+const db = require('../db');
 const router = express.Router();
 
 const sanitizeNumber = (value, defaultValue = 0) =>
@@ -7,6 +7,7 @@ const sanitizeNumber = (value, defaultValue = 0) =>
     ? defaultValue
     : parseFloat(value);
 
+// POST - Create new product
 router.post('/post/product', async (req, res) => {
   const data = req.body;
 
@@ -22,7 +23,26 @@ router.post('/post/product', async (req, res) => {
     data.design,
     sanitizeNumber(data.gross_wt),
     sanitizeNumber(data.stone_wt),
-    sanitizeNumber(data.net_wt)
+    sanitizeNumber(data.net_wt),
+    sanitizeNumber(data.stone_price),
+    data.pricing || 'By Weight',
+    data.va_on || 'Gross Weight',
+    sanitizeNumber(data.va_percent),
+    sanitizeNumber(data.wastage_weight),
+    sanitizeNumber(data.total_weight_av),
+    data.mc_on || 'MC %',
+    sanitizeNumber(data.mc_per_gram),
+    sanitizeNumber(data.making_charges),
+    sanitizeNumber(data.rate),
+    sanitizeNumber(data.rate_amt),
+    sanitizeNumber(data.hm_charges, 60.00),
+    data.tax_percent || '0.9% GST',
+    sanitizeNumber(data.tax_amt),
+    sanitizeNumber(data.total_price),
+    sanitizeNumber(data.pieace_cost),
+    sanitizeNumber(data.disscount_percentage),
+    sanitizeNumber(data.disscount),
+    sanitizeNumber(data.qty, 1)
   ];
 
   const sql = `
@@ -31,8 +51,12 @@ router.post('/post/product', async (req, res) => {
       metal_type_id, metal_type,
       purity_id, purity,
       design_id, design,
-      gross_wt, stone_wt, net_wt
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      gross_wt, stone_wt, net_wt,
+      stone_price, pricing, va_on, va_percent, wastage_weight,
+      total_weight_av, mc_on, mc_per_gram, making_charges,
+      rate, rate_amt, hm_charges, tax_percent, tax_amt,
+      total_price, pieace_cost, disscount_percentage, disscount, qty
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   try {
@@ -43,10 +67,11 @@ router.post('/post/product', async (req, res) => {
     });
   } catch (err) {
     console.error('Error creating product:', err);
-    res.status(500).json({ message: 'Database error' });
+    res.status(500).json({ message: 'Database error', error: err.message });
   }
 });
 
+// GET - Get all products
 router.get('/get/products', async (req, res) => {
   try {
     const [rows] = await db.query(`SELECT * FROM product`);
@@ -57,6 +82,7 @@ router.get('/get/products', async (req, res) => {
   }
 });
 
+// GET - Get single product by ID
 router.get('/get/product/:product_id', async (req, res) => {
   const { product_id } = req.params;
 
@@ -77,7 +103,8 @@ router.get('/get/product/:product_id', async (req, res) => {
   }
 });
 
-router.put('/put/product/:product_id', async (req, res) => {
+// PUT - Update product
+router.put('/update/product/:product_id', async (req, res) => {
   const { product_id } = req.params;
   const data = req.body;
 
@@ -94,6 +121,25 @@ router.put('/put/product/:product_id', async (req, res) => {
     sanitizeNumber(data.gross_wt),
     sanitizeNumber(data.stone_wt),
     sanitizeNumber(data.net_wt),
+    sanitizeNumber(data.stone_price),
+    data.pricing || 'By Weight',
+    data.va_on || 'Gross Weight',
+    sanitizeNumber(data.va_percent),
+    sanitizeNumber(data.wastage_weight),
+    sanitizeNumber(data.total_weight_av),
+    data.mc_on || 'MC %',
+    sanitizeNumber(data.mc_per_gram),
+    sanitizeNumber(data.making_charges),
+    sanitizeNumber(data.rate),
+    sanitizeNumber(data.rate_amt),
+    sanitizeNumber(data.hm_charges, 60.00),
+    data.tax_percent || '0.9% GST',
+    sanitizeNumber(data.tax_amt),
+    sanitizeNumber(data.total_price),
+    sanitizeNumber(data.pieace_cost),
+    sanitizeNumber(data.disscount_percentage),
+    sanitizeNumber(data.disscount),
+    sanitizeNumber(data.qty, 1),
     product_id
   ];
 
@@ -103,7 +149,11 @@ router.put('/put/product/:product_id', async (req, res) => {
       metal_type_id = ?, metal_type = ?,
       purity_id = ?, purity = ?,
       design_id = ?, design = ?,
-      gross_wt = ?, stone_wt = ?, net_wt = ?
+      gross_wt = ?, stone_wt = ?, net_wt = ?,
+      stone_price = ?, pricing = ?, va_on = ?, va_percent = ?, wastage_weight = ?,
+      total_weight_av = ?, mc_on = ?, mc_per_gram = ?, making_charges = ?,
+      rate = ?, rate_amt = ?, hm_charges = ?, tax_percent = ?, tax_amt = ?,
+      total_price = ?, pieace_cost = ?, disscount_percentage = ?, disscount = ?, qty = ?
     WHERE product_id = ?
   `;
 
@@ -117,10 +167,11 @@ router.put('/put/product/:product_id', async (req, res) => {
     res.status(200).json({ message: 'Product updated successfully' });
   } catch (err) {
     console.error('Error updating product:', err);
-    res.status(500).json({ message: 'Database error' });
+    res.status(500).json({ message: 'Database error', error: err.message });
   }
 });
 
+// DELETE - Delete product
 router.delete('/delete/product/:product_id', async (req, res) => {
   const { product_id } = req.params;
 
@@ -140,6 +191,5 @@ router.delete('/delete/product/:product_id', async (req, res) => {
     res.status(500).json({ message: 'Database error' });
   }
 });
-
 
 module.exports = router;
