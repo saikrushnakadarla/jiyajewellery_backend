@@ -232,4 +232,68 @@ router.get('/rates/init', async (req, res) => {
     }
 });
 
+// Add this route to your rates.js file
+
+// GET rate by purity name (16crt, 18crt, 22crt, 24crt, silver)
+// Update this function in rates.js
+
+// GET rate by purity name (16crt, 18crt, 22crt, 24crt, silver)
+router.get('/rates/by-purity/:purityName', async (req, res) => {
+    const { purityName } = req.params;
+    
+    // Map purity names to database column names
+    const purityMap = {
+        '16crt': 'rate_16crt',
+        '18crt': 'rate_18crt', 
+        '22crt': 'rate_22crt',
+        '24crt': 'rate_24crt',
+        'silver': 'silver_rate',
+        '16': 'rate_16crt',
+        '18': 'rate_18crt',
+        '22': 'rate_22crt',
+        '24': 'rate_24crt'
+    };
+    
+    const columnName = purityMap[purityName.toLowerCase()];
+    
+    if (!columnName) {
+        return res.status(400).json({ 
+            error: 'Invalid purity name. Valid values: 16crt, 18crt, 22crt, 24crt, silver, 16, 18, 22, 24'
+        });
+    }
+    
+    try {
+        const [result] = await db.query(
+            `SELECT ${columnName} as rate, rate_date, rate_time 
+             FROM rates 
+             ORDER BY rate_date DESC, rate_time DESC 
+             LIMIT 1`
+        );
+
+        if (result.length === 0) {
+            return res.status(200).json({
+                rate: 0,
+                rate_date: new Date().toISOString().split('T')[0],
+                rate_time: '00:00:00',
+                message: 'No rates found, returning default'
+            });
+        }
+
+        res.status(200).json({
+            rate: result[0].rate,
+            rate_date: result[0].rate_date,
+            rate_time: result[0].rate_time
+        });
+    } catch (error) {
+        console.error('Error fetching rate by purity:', error);
+        res.status(500).json({ 
+            error: 'Failed to fetch rate',
+            details: error.message 
+        });
+    }
+});
+
+
+
+
 module.exports = router;
