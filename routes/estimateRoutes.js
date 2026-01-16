@@ -28,7 +28,7 @@ router.post("/add/estimate", async (req, res) => {
       // 2. Update existing estimate
       const updateSql = `
         UPDATE estimate SET
-          date=?, pcode=?, code=?, product_id=?, product_name=?, metal_type=?, design_name=?,
+          date=?, pcode=?, customer_name=?, customer_id=?, salesperson_id=?, estimate_status=?, code=?, product_id=?, product_name=?, metal_type=?, design_name=?,
           purity=?, category=?, sub_category=?, gross_weight=?, stone_weight=?, stone_price=?,
           weight_bw=?, va_on=?, va_percent=?, wastage_weight=?, msp_va_percent=?, msp_wastage_weight=?, total_weight_av=?,
           mc_on=?, mc_per_gram=?, making_charges=?, rate=?, rate_amt=?, tax_percent=?,
@@ -40,6 +40,10 @@ router.post("/add/estimate", async (req, res) => {
       await db.query(updateSql, [
         data.date,
         data.pcode,
+        data.customer_name,
+        data.customer_id,
+        data.estimate_status,
+        data.salesperson_id,
         data.code,
         data.product_id,
         data.product_name,
@@ -86,16 +90,20 @@ router.post("/add/estimate", async (req, res) => {
       // 3. Insert new estimate
       const insertSql = `
         INSERT INTO estimate (
-          date, pcode, estimate_number, code, product_id, product_name, metal_type, design_name, purity,
+          date, pcode, customer_name, customer_id, estimate_status, salesperson_id, estimate_number, code, product_id, product_name, metal_type, design_name, purity,
           category, sub_category, gross_weight, stone_weight, stone_price, weight_bw, va_on, va_percent, wastage_weight, 
           msp_va_percent, msp_wastage_weight, total_weight_av, mc_on, mc_per_gram, making_charges, rate, rate_amt, tax_percent,
           tax_amt, total_price, pricing, pieace_cost, disscount_percentage, disscount, hm_charges, total_amount,
           taxable_amount, tax_amount, net_amount, original_total_price, opentag_id, qty
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
 
       const insertValues = [
         data.date,
         data.pcode,
+        data.customer_name,
+        data.customer_id,
+        data.estimate_status,
+        data.salesperson_id,
         data.estimate_number,
         data.code,
         data.product_id,
@@ -164,13 +172,13 @@ router.put("/edit/estimate/:id", async (req, res) => {
     const data = req.body;
 
     const sql = `UPDATE estimate SET
-        date=?, pcode=?, estimate_number=?, code=?, product_id=?, product_name=?, metal_type=?, design_name=?,
+        date=?, pcode=?, customer_name=?, customer_id=?, estimate_status=?, salesperson_id=?, estimate_number=?, code=?, product_id=?, product_name=?, metal_type=?, design_name=?,
         purity=?, category=?, sub_category=?, gross_weight=?, stone_weight=?, stone_price=?, weight_bw=?, va_on=?, va_percent=?,
         wastage_weight=?, msp_va_percent=?, msp_wastage_weight=?, total_weight_av=?, mc_on=?, mc_per_gram=?, making_charges=?, rate=?, rate_amt=?, tax_percent=?, tax_amt=?, total_price=?
         WHERE id=?`;
 
     const [result] = await db.query(sql, [
-      data.date, data.pcode, data.estimate_number, data.code, data.product_id, data.product_name, data.metal_type, data.design_name,
+      data.date, data.pcode, data.customer_name, data.customer_id, data.estimate_status, data.salesperson_id, data.estimate_number, data.code, data.product_id, data.product_name, data.metal_type, data.design_name,
       data.purity, data.category, data.sub_category, data.gross_weight, data.stone_weight, data.stone_price, data.weight_bw,
       data.va_on, data.va_percent, data.wastage_weight, data.msp_va_percent, data.msp_wastage_weight, data.total_weight_av, data.mc_on, data.mc_per_gram, data.making_charges,
       data.rate, data.rate_amt, data.tax_percent, data.tax_amt, data.total_price, id
