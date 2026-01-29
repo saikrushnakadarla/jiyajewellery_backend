@@ -13,10 +13,20 @@ const sanitizeNumeric = (val) => (val ? parseFloat(val.toString().replace(/[^\d.
 router.post("/add/estimate", async (req, res) => {
   try {
     const data = req.body;
-    // console.log("Received body=",req.body)
+    console.log("Received estimate data:", JSON.stringify(data, null, 2)); // Debug log
+    
     if (!data.date || !data.estimate_number) {
-      return res.status(400).json({ message: "Missing required fields" });
+      return res.status(400).json({ message: "Missing required fields: date and estimate_number" });
     }
+
+    // Extract fields with proper fallbacks
+    const code = data.code || data.barcode || "";
+    const category = data.category || "";
+    const subCategory = data.sub_category || "";
+    const salespersonId = data.salesperson_id || "";
+    const customerId = data.customer_id || "";
+    const customerName = data.customer_name || "";
+    const estimateStatus = data.estimate_status || "Pending";
 
     // 1. Check if estimate already exists
     const [checkResult] = await db.query(
@@ -37,32 +47,32 @@ router.post("/add/estimate", async (req, res) => {
           original_total_price=?, opentag_id=?, qty=?
         WHERE estimate_number=?`;
 
-      await db.query(updateSql, [
+      const updateValues = [
         data.date,
-        data.pcode,
-        data.customer_name,
-        data.customer_id,
-        data.estimate_status,
-        data.salesperson_id,
-        data.code,
+        data.pcode || null,
+        customerName,
+        customerId,
+        salespersonId,
+        estimateStatus,
+        code,
         data.product_id,
         data.product_name,
         data.metal_type,
         data.design_name,
         data.purity,
-        data.category,
-        data.sub_category,
+        category,
+        subCategory,
         sanitizeNumber(data.gross_weight),
         sanitizeNumber(data.stone_weight),
         sanitizeNumber(data.stone_price),
         sanitizeNumber(data.weight_bw),
-        sanitizeNumber(data.va_on),
+        data.va_on,
         sanitizeNumber(data.va_percent),
         sanitizeNumber(data.wastage_weight),
         sanitizeNumber(data.msp_va_percent),
         sanitizeNumber(data.msp_wastage_weight),
         sanitizeNumber(data.total_weight_av),
-        sanitizeNumber(data.mc_on),
+        data.mc_on,
         sanitizeNumber(data.mc_per_gram),
         sanitizeNumber(data.making_charges),
         sanitizeNumber(data.rate),
@@ -70,7 +80,7 @@ router.post("/add/estimate", async (req, res) => {
         sanitizeNumeric(data.tax_percent),
         sanitizeNumber(data.tax_amt),
         sanitizeNumber(data.total_price),
-        sanitizeNumber(data.pricing),
+        data.pricing,
         sanitizeNumber(data.pieace_cost),
         sanitizeNumber(data.disscount_percentage),
         sanitizeNumber(data.disscount),
@@ -83,7 +93,11 @@ router.post("/add/estimate", async (req, res) => {
         sanitizeNumber(data.opentag_id),
         sanitizeNumber(data.qty),
         data.estimate_number,
-      ]);
+      ];
+
+      console.log("Update values:", updateValues); // Debug log
+      
+      await db.query(updateSql, updateValues);
 
       return res.status(200).json({ message: "Estimate updated successfully" });
     } else {
@@ -99,31 +113,31 @@ router.post("/add/estimate", async (req, res) => {
 
       const insertValues = [
         data.date,
-        data.pcode,
-        data.customer_name,
-        data.customer_id,
-        data.estimate_status,
-        data.salesperson_id,
+        data.pcode || null,
+        customerName,
+        customerId,
+        estimateStatus,
+        salespersonId,
         data.estimate_number,
-        data.code,
+        code,
         data.product_id,
         data.product_name,
         data.metal_type,
         data.design_name,
         data.purity,
-        data.category,
-        data.sub_category,
+        category,
+        subCategory,
         sanitizeNumber(data.gross_weight),
         sanitizeNumber(data.stone_weight),
         sanitizeNumber(data.stone_price),
         sanitizeNumber(data.weight_bw),
-        sanitizeNumber(data.va_on),
+        data.va_on,
         sanitizeNumber(data.va_percent),
         sanitizeNumber(data.wastage_weight),
         sanitizeNumber(data.msp_va_percent),
         sanitizeNumber(data.msp_wastage_weight),
         sanitizeNumber(data.total_weight_av),
-        sanitizeNumber(data.mc_on),
+        data.mc_on,
         sanitizeNumber(data.mc_per_gram),
         sanitizeNumber(data.making_charges),
         sanitizeNumber(data.rate),
@@ -131,7 +145,7 @@ router.post("/add/estimate", async (req, res) => {
         sanitizeNumeric(data.tax_percent),
         sanitizeNumber(data.tax_amt),
         sanitizeNumber(data.total_price),
-        sanitizeNumber(data.pricing),
+        data.pricing,
         sanitizeNumber(data.pieace_cost),
         sanitizeNumber(data.disscount_percentage),
         sanitizeNumber(data.disscount),
@@ -145,9 +159,15 @@ router.post("/add/estimate", async (req, res) => {
         sanitizeNumber(data.qty),
       ];
 
+      console.log("Insert values:", insertValues); // Debug log
+      
       const [result] = await db.query(insertSql, insertValues);
 
-      return res.status(200).json({ message: "Estimate added successfully", id: result.insertId });
+      return res.status(200).json({ 
+        message: "Estimate added successfully", 
+        id: result.insertId,
+        estimate_number: data.estimate_number 
+      });
     }
   } catch (err) {
     console.error("Error inserting/updating estimate:", err);
@@ -165,28 +185,88 @@ router.get("/get/estimates", async (req, res) => {
   }
 });
 
+// Edit estimate status by ID - NEW ENDPOINT
+router.put("/update-estimate-status/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { estimate_status } = req.body;
+    
+    if (!estimate_status) {
+      return res.status(400).json({ message: "Status is required" });
+    }
+
+    console.log(`Updating estimate ID ${id} to status: ${estimate_status}`);
+
+    // First, check if estimate exists by estimate_number or estimate_id
+    const [checkResult] = await db.query(
+      "SELECT estimate_id FROM estimate WHERE estimate_id = ? OR estimate_number = ?",
+      [id, id]
+    );
+
+    if (checkResult.length === 0) {
+      return res.status(404).json({ message: "Estimate not found" });
+    }
+
+    const estimateId = checkResult[0].estimate_id;
+
+    // Update only the status field
+    const [result] = await db.query(
+      "UPDATE estimate SET estimate_status = ?, updated_at = NOW() WHERE estimate_id = ?",
+      [estimate_status, estimateId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(500).json({ message: "Failed to update status" });
+    }
+
+    res.json({ 
+      success: true, 
+      message: "Estimate status updated successfully",
+      estimate_id: estimateId,
+      estimate_status: estimate_status
+    });
+
+  } catch (err) {
+    console.error("Error updating estimate status:", err);
+    res.status(500).json({ message: "Failed to update estimate status", error: err.message });
+  }
+});
+
+// Edit estimate by ID
 // Edit estimate by ID
 router.put("/edit/estimate/:id", async (req, res) => {
   try {
     const id = req.params.id;
     const data = req.body;
 
+    console.log(`Editing estimate with identifier: ${id}`);
+
+    // Check if id is numeric (estimate_id) or string (estimate_number)
+    let whereClause = "estimate_id = ?";
+    let queryId = id;
+    
+    // If id is not numeric, assume it's estimate_number
+    if (isNaN(id)) {
+      whereClause = "estimate_number = ?";
+    }
+
     const sql = `UPDATE estimate SET
         date=?, pcode=?, customer_name=?, customer_id=?, estimate_status=?, salesperson_id=?, estimate_number=?, code=?, product_id=?, product_name=?, metal_type=?, design_name=?,
         purity=?, category=?, sub_category=?, gross_weight=?, stone_weight=?, stone_price=?, weight_bw=?, va_on=?, va_percent=?,
         wastage_weight=?, msp_va_percent=?, msp_wastage_weight=?, total_weight_av=?, mc_on=?, mc_per_gram=?, making_charges=?, rate=?, rate_amt=?, tax_percent=?, tax_amt=?, total_price=?
-        WHERE estimate_id=?`;
+        WHERE ${whereClause}`;
 
     const [result] = await db.query(sql, [
-      data.date, data.pcode, data.customer_name, data.customer_id, data.estimate_status, data.salesperson_id, data.estimate_number, data.code, data.product_id, data.product_name, data.metal_type, data.design_name,
+      data.date, data.pcode, data.customer_name, data.customer_id, data.estimate_status || "Pending", data.salesperson_id, data.estimate_number, data.code, data.product_id, data.product_name, data.metal_type, data.design_name,
       data.purity, data.category, data.sub_category, data.gross_weight, data.stone_weight, data.stone_price, data.weight_bw,
       data.va_on, data.va_percent, data.wastage_weight, data.msp_va_percent, data.msp_wastage_weight, data.total_weight_av, data.mc_on, data.mc_per_gram, data.making_charges,
-      data.rate, data.rate_amt, data.tax_percent, data.tax_amt, data.total_price, id
+      data.rate, data.rate_amt, data.tax_percent, data.tax_amt, data.total_price, queryId
     ]);
 
     if (result.affectedRows === 0) return res.status(404).json({ message: "Estimate not found" });
-    res.json({ message: "Estimate updated successfully" });
+    res.json({ success: true, message: "Estimate updated successfully" });
   } catch (err) {
+    console.error("Error updating estimate:", err);
     res.status(500).json({ message: "Failed to update estimate", error: err.message });
   }
 });
