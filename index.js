@@ -19,6 +19,8 @@ const categoryRoutes = require('./routes/categoryRoutes');
 const productRoutes = require('./routes/productRoutes');
 const estimateRoutes = require('./routes/estimateRoutes');
 const ratesRoutes = require('./routes/ratesRoutes');
+const cartRoutes = require('./routes/cartRoutes');
+
 
 // Use routes
 app.use('/', userRoutes);
@@ -29,6 +31,7 @@ app.use('/', designMasterRoutes);
 app.use('/', categoryRoutes);
 app.use('/', productRoutes);
 app.use('/', estimateRoutes);
+app.use('/api/cart', cartRoutes);
 
 // Default route
 app.get('/', (req, res) => {
