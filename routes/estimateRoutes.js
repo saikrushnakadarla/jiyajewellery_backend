@@ -27,6 +27,7 @@ router.post("/add/estimate", async (req, res) => {
     const customerId = data.customer_id || "";
     const customerName = data.customer_name || "";
     const estimateStatus = data.estimate_status || "Pending";
+    const sourceBy = data.source_by || ""; // NEW: Get source_by from request
 
     // 1. Check if estimate already exists
     const [checkResult] = await db.query(
@@ -38,7 +39,7 @@ router.post("/add/estimate", async (req, res) => {
       // 2. Update existing estimate
       const updateSql = `
         UPDATE estimate SET
-          date=?, pcode=?, customer_name=?, customer_id=?, salesperson_id=?, estimate_status=?, code=?, product_id=?, product_name=?, metal_type=?, design_name=?,
+          date=?, pcode=?, customer_name=?, customer_id=?, salesperson_id=?, source_by=?, estimate_status=?, code=?, product_id=?, product_name=?, metal_type=?, design_name=?,
           purity=?, category=?, sub_category=?, gross_weight=?, stone_weight=?, stone_price=?,
           weight_bw=?, va_on=?, va_percent=?, wastage_weight=?, msp_va_percent=?, msp_wastage_weight=?, total_weight_av=?,
           mc_on=?, mc_per_gram=?, making_charges=?, rate=?, rate_amt=?, tax_percent=?,
@@ -53,6 +54,7 @@ router.post("/add/estimate", async (req, res) => {
         customerName,
         customerId,
         salespersonId,
+        sourceBy, // NEW: Add source_by
         estimateStatus,
         code,
         data.product_id,
@@ -104,20 +106,21 @@ router.post("/add/estimate", async (req, res) => {
       // 3. Insert new estimate
       const insertSql = `
         INSERT INTO estimate (
-          date, pcode, customer_name, customer_id, estimate_status, salesperson_id, estimate_number, code, product_id, product_name, metal_type, design_name, purity,
+          date, pcode, customer_name, customer_id, salesperson_id, source_by, estimate_status, estimate_number, code, product_id, product_name, metal_type, design_name, purity,
           category, sub_category, gross_weight, stone_weight, stone_price, weight_bw, va_on, va_percent, wastage_weight, 
           msp_va_percent, msp_wastage_weight, total_weight_av, mc_on, mc_per_gram, making_charges, rate, rate_amt, tax_percent,
           tax_amt, total_price, pricing, pieace_cost, disscount_percentage, disscount, hm_charges, total_amount,
           taxable_amount, tax_amount, net_amount, original_total_price, opentag_id, qty
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
 
       const insertValues = [
         data.date,
         data.pcode || null,
         customerName,
         customerId,
-        estimateStatus,
         salespersonId,
+        sourceBy, // NEW: Add source_by
+        estimateStatus,
         data.estimate_number,
         code,
         data.product_id,
@@ -185,7 +188,18 @@ router.get("/get/estimates", async (req, res) => {
   }
 });
 
-// Edit estimate status by ID - NEW ENDPOINT
+// NEW: Get estimates by source (admin, salesperson, customer)
+router.get("/get/estimates-by-source/:source", async (req, res) => {
+  try {
+    const source = req.params.source;
+    const [results] = await db.query("SELECT * FROM estimate WHERE source_by = ?", [source]);
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch estimates by source", error: err.message });
+  }
+});
+
+// Edit estimate status by ID
 router.put("/update-estimate-status/:id", async (req, res) => {
   try {
     const id = req.params.id;
@@ -233,7 +247,6 @@ router.put("/update-estimate-status/:id", async (req, res) => {
 });
 
 // Edit estimate by ID
-// Edit estimate by ID
 router.put("/edit/estimate/:id", async (req, res) => {
   try {
     const id = req.params.id;
@@ -251,13 +264,13 @@ router.put("/edit/estimate/:id", async (req, res) => {
     }
 
     const sql = `UPDATE estimate SET
-        date=?, pcode=?, customer_name=?, customer_id=?, estimate_status=?, salesperson_id=?, estimate_number=?, code=?, product_id=?, product_name=?, metal_type=?, design_name=?,
+        date=?, pcode=?, customer_name=?, customer_id=?, salesperson_id=?, source_by=?, estimate_status=?, estimate_number=?, code=?, product_id=?, product_name=?, metal_type=?, design_name=?,
         purity=?, category=?, sub_category=?, gross_weight=?, stone_weight=?, stone_price=?, weight_bw=?, va_on=?, va_percent=?,
         wastage_weight=?, msp_va_percent=?, msp_wastage_weight=?, total_weight_av=?, mc_on=?, mc_per_gram=?, making_charges=?, rate=?, rate_amt=?, tax_percent=?, tax_amt=?, total_price=?
         WHERE ${whereClause}`;
 
     const [result] = await db.query(sql, [
-      data.date, data.pcode, data.customer_name, data.customer_id, data.estimate_status || "Pending", data.salesperson_id, data.estimate_number, data.code, data.product_id, data.product_name, data.metal_type, data.design_name,
+      data.date, data.pcode, data.customer_name, data.customer_id, data.salesperson_id, data.source_by, data.estimate_status || "Pending", data.estimate_number, data.code, data.product_id, data.product_name, data.metal_type, data.design_name,
       data.purity, data.category, data.sub_category, data.gross_weight, data.stone_weight, data.stone_price, data.weight_bw,
       data.va_on, data.va_percent, data.wastage_weight, data.msp_va_percent, data.msp_wastage_weight, data.total_weight_av, data.mc_on, data.mc_per_gram, data.making_charges,
       data.rate, data.rate_amt, data.tax_percent, data.tax_amt, data.total_price, queryId
@@ -305,7 +318,6 @@ router.delete("/delete/estimate/:estimate_number", async (req, res) => {
     res.status(500).json({ message: "Failed to delete estimate", error: err.message });
   }
 });
-
 
 // Get last estimate number
 router.get("/lastEstimateNumber", async (req, res) => {
@@ -361,7 +373,8 @@ router.get("/get-estimates/:estimate_number", async (req, res) => {
       total_amount: results[0].total_amount,
       taxable_amount: results[0].taxable_amount,
       tax_amount: results[0].tax_amount,
-      net_amount: results[0].net_amount
+      net_amount: results[0].net_amount,
+      source_by: results[0].source_by // NEW: Include source_by
     };
 
     const repeatedData = results.map(row => ({
