@@ -4,7 +4,6 @@ const router = express.Router();
 const fs = require('fs').promises;
 const path = require('path');
 
-
 // Helper functions
 const sanitizeNumber = (val, def = 0) => (val === "" || val === null ? def : val);
 const sanitizeNumeric = (val) => (val ? parseFloat(val.toString().replace(/[^\d.]/g, "")) || 0 : 0);
@@ -13,7 +12,15 @@ const sanitizeNumeric = (val) => (val ? parseFloat(val.toString().replace(/[^\d.
 router.post("/add/estimate", async (req, res) => {
   try {
     const data = req.body;
-    console.log("Received estimate data:", JSON.stringify(data, null, 2)); // Debug log
+    console.log("=== RECEIVING ESTIMATE DATA ===");
+    console.log("Full request body received:", JSON.stringify(data, null, 2));
+    
+    // Log the specific fields we're interested in
+    console.log("salesperson_id from request:", data.salesperson_id);
+    console.log("source_by from request:", data.source_by);
+    console.log("customer_id from request:", data.customer_id);
+    console.log("customer_name from request:", data.customer_name);
+    console.log("estimate_number from request:", data.estimate_number);
     
     if (!data.date || !data.estimate_number) {
       return res.status(400).json({ message: "Missing required fields: date and estimate_number" });
@@ -27,7 +34,13 @@ router.post("/add/estimate", async (req, res) => {
     const customerId = data.customer_id || "";
     const customerName = data.customer_name || "";
     const estimateStatus = data.estimate_status || "Pending";
-    const sourceBy = data.source_by || ""; // NEW: Get source_by from request
+    const sourceBy = data.source_by || "";
+
+    console.log("Extracted values for database:");
+    console.log("salespersonId:", salespersonId);
+    console.log("sourceBy:", sourceBy);
+    console.log("customerId:", customerId);
+    console.log("customerName:", customerName);
 
     // 1. Check if estimate already exists
     const [checkResult] = await db.query(
@@ -35,8 +48,11 @@ router.post("/add/estimate", async (req, res) => {
       [data.estimate_number]
     );
 
+    console.log(`Check if estimate exists: ${checkResult[0].count} records found`);
+
     if (checkResult[0].count > 0) {
       // 2. Update existing estimate
+      console.log("Updating existing estimate...");
       const updateSql = `
         UPDATE estimate SET
           date=?, pcode=?, customer_name=?, customer_id=?, salesperson_id=?, source_by=?, estimate_status=?, code=?, product_id=?, product_name=?, metal_type=?, design_name=?,
@@ -54,7 +70,7 @@ router.post("/add/estimate", async (req, res) => {
         customerName,
         customerId,
         salespersonId,
-        sourceBy, // NEW: Add source_by
+        sourceBy,
         estimateStatus,
         code,
         data.product_id,
@@ -97,13 +113,30 @@ router.post("/add/estimate", async (req, res) => {
         data.estimate_number,
       ];
 
-      console.log("Update values:", updateValues); // Debug log
+      console.log("Update SQL:", updateSql);
+      console.log("Update values (first 10):", updateValues.slice(0, 10));
+      console.log("salespersonId in updateValues:", updateValues[4]);
+      console.log("sourceBy in updateValues:", updateValues[5]);
       
-      await db.query(updateSql, updateValues);
+      const [updateResult] = await db.query(updateSql, updateValues);
+      console.log("Update result:", updateResult);
+      console.log(`Rows affected: ${updateResult.affectedRows}`);
 
-      return res.status(200).json({ message: "Estimate updated successfully" });
+      // Verify the update worked
+      const [verifyResult] = await db.query(
+        "SELECT salesperson_id, source_by FROM estimate WHERE estimate_number = ?",
+        [data.estimate_number]
+      );
+      console.log("Verification after update:", verifyResult[0]);
+
+      return res.status(200).json({ 
+        message: "Estimate updated successfully",
+        salesperson_id: salespersonId,
+        source_by: sourceBy
+      });
     } else {
       // 3. Insert new estimate
+      console.log("Inserting new estimate...");
       const insertSql = `
         INSERT INTO estimate (
           date, pcode, customer_name, customer_id, salesperson_id, source_by, estimate_status, estimate_number, code, product_id, product_name, metal_type, design_name, purity,
@@ -119,7 +152,7 @@ router.post("/add/estimate", async (req, res) => {
         customerName,
         customerId,
         salespersonId,
-        sourceBy, // NEW: Add source_by
+        sourceBy,
         estimateStatus,
         data.estimate_number,
         code,
@@ -162,18 +195,35 @@ router.post("/add/estimate", async (req, res) => {
         sanitizeNumber(data.qty),
       ];
 
-      console.log("Insert values:", insertValues); // Debug log
+      console.log("Insert SQL:", insertSql);
+      console.log("Insert values (first 10):", insertValues.slice(0, 10));
+      console.log("salespersonId in insertValues:", insertValues[4]);
+      console.log("sourceBy in insertValues:", insertValues[5]);
       
       const [result] = await db.query(insertSql, insertValues);
+      console.log("Insert result:", result);
+      console.log(`Insert ID: ${result.insertId}`);
+
+      // Verify the insert worked
+      const [verifyResult] = await db.query(
+        "SELECT salesperson_id, source_by FROM estimate WHERE estimate_id = ?",
+        [result.insertId]
+      );
+      console.log("Verification after insert:", verifyResult[0]);
 
       return res.status(200).json({ 
         message: "Estimate added successfully", 
         id: result.insertId,
-        estimate_number: data.estimate_number 
+        estimate_number: data.estimate_number,
+        salesperson_id: salespersonId,
+        source_by: sourceBy
       });
     }
   } catch (err) {
-    console.error("Error inserting/updating estimate:", err);
+    console.error("=== ERROR INSERTING/UPDATING ESTIMATE ===");
+    console.error("Error message:", err.message);
+    console.error("Error stack:", err.stack);
+    console.error("Request body that caused error:", req.body);
     res.status(500).json({ message: "Server error", error: err.message });
   }
 });
@@ -181,9 +231,22 @@ router.post("/add/estimate", async (req, res) => {
 // Get all estimates
 router.get("/get/estimates", async (req, res) => {
   try {
-    const [results] = await db.query("SELECT * FROM estimate");
+    console.log("Fetching all estimates...");
+    const [results] = await db.query("SELECT * FROM estimate ORDER BY estimate_id DESC");
+    console.log(`Found ${results.length} estimates`);
+    
+    // Log a sample of what's stored
+    if (results.length > 0) {
+      console.log("Sample estimate record:");
+      console.log("estimate_id:", results[0].estimate_id);
+      console.log("salesperson_id:", results[0].salesperson_id);
+      console.log("source_by:", results[0].source_by);
+      console.log("estimate_number:", results[0].estimate_number);
+    }
+    
     res.json(results);
   } catch (err) {
+    console.error("Error fetching estimates:", err);
     res.status(500).json({ message: "Failed to fetch estimates", error: err.message });
   }
 });
@@ -192,7 +255,11 @@ router.get("/get/estimates", async (req, res) => {
 router.get("/get/estimates-by-source/:source", async (req, res) => {
   try {
     const source = req.params.source;
-    const [results] = await db.query("SELECT * FROM estimate WHERE source_by = ?", [source]);
+    console.log(`Fetching estimates by source: ${source}`);
+    
+    const [results] = await db.query("SELECT * FROM estimate WHERE source_by = ? ORDER BY estimate_id DESC", [source]);
+    console.log(`Found ${results.length} estimates for source: ${source}`);
+    
     res.json(results);
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch estimates by source", error: err.message });
@@ -253,6 +320,7 @@ router.put("/edit/estimate/:id", async (req, res) => {
     const data = req.body;
 
     console.log(`Editing estimate with identifier: ${id}`);
+    console.log("Data received for edit:", data);
 
     // Check if id is numeric (estimate_id) or string (estimate_number)
     let whereClause = "estimate_id = ?";
@@ -269,14 +337,20 @@ router.put("/edit/estimate/:id", async (req, res) => {
         wastage_weight=?, msp_va_percent=?, msp_wastage_weight=?, total_weight_av=?, mc_on=?, mc_per_gram=?, making_charges=?, rate=?, rate_amt=?, tax_percent=?, tax_amt=?, total_price=?
         WHERE ${whereClause}`;
 
-    const [result] = await db.query(sql, [
+    const updateValues = [
       data.date, data.pcode, data.customer_name, data.customer_id, data.salesperson_id, data.source_by, data.estimate_status || "Pending", data.estimate_number, data.code, data.product_id, data.product_name, data.metal_type, data.design_name,
       data.purity, data.category, data.sub_category, data.gross_weight, data.stone_weight, data.stone_price, data.weight_bw,
       data.va_on, data.va_percent, data.wastage_weight, data.msp_va_percent, data.msp_wastage_weight, data.total_weight_av, data.mc_on, data.mc_per_gram, data.making_charges,
       data.rate, data.rate_amt, data.tax_percent, data.tax_amt, data.total_price, queryId
-    ]);
+    ];
+
+    console.log("Update values for edit:", updateValues);
+
+    const [result] = await db.query(sql, updateValues);
 
     if (result.affectedRows === 0) return res.status(404).json({ message: "Estimate not found" });
+    
+    console.log(`Edit successful, rows affected: ${result.affectedRows}`);
     res.json({ success: true, message: "Estimate updated successfully" });
   } catch (err) {
     console.error("Error updating estimate:", err);
@@ -293,12 +367,14 @@ router.delete("/delete/estimate/:estimate_number", async (req, res) => {
       return res.status(400).json({ message: "Estimate number is required" });
     }
 
+    console.log(`Deleting estimate: ${estimateNumber}`);
+
     // Delete the PDF file if it exists
     try {
       const pdfPath = path.join(__dirname, '../uploads/invoices', `${estimateNumber}.pdf`);
       await fs.access(pdfPath); // Check if file exists
       await fs.unlink(pdfPath); // Delete the file
-      // console.log(`PDF file deleted: ${estimateNumber}.pdf`);
+      console.log(`PDF file deleted: ${estimateNumber}.pdf`);
     } catch (fileError) {
       // File doesn't exist or couldn't be deleted - log but don't fail the operation
       console.log(`PDF file not found or couldn't be deleted: ${estimateNumber}.pdf`, fileError.message);
@@ -311,6 +387,7 @@ router.delete("/delete/estimate/:estimate_number", async (req, res) => {
       return res.status(404).json({ message: "Estimate not found" });
     }
     
+    console.log(`Deleted ${result.affectedRows} rows from database`);
     res.json({ message: "Estimate deleted successfully" });
     
   } catch (err) {
@@ -322,6 +399,7 @@ router.delete("/delete/estimate/:estimate_number", async (req, res) => {
 // Get last estimate number
 router.get("/lastEstimateNumber", async (req, res) => {
   try {
+    console.log("Fetching last estimate number...");
     const [results] = await db.query("SELECT estimate_number FROM estimate WHERE estimate_number LIKE 'EST%' ORDER BY estimate_id DESC");
 
     if (results.length > 0) {
@@ -331,8 +409,10 @@ router.get("/lastEstimateNumber", async (req, res) => {
         .map(e => parseInt(e.slice(3), 10));
       const lastNum = Math.max(...estNumbers);
       const nextNum = `EST${String(lastNum + 1).padStart(3, "0")}`;
+      console.log(`Last estimate number: EST${lastNum}, Next: ${nextNum}`);
       res.json({ lastEstimateNumber: nextNum });
     } else {
+      console.log("No estimates found, starting with EST001");
       res.json({ lastEstimateNumber: "EST001" });
     }
   } catch (err) {
@@ -343,6 +423,7 @@ router.get("/lastEstimateNumber", async (req, res) => {
 // Get unique estimates
 router.get("/get-unique-estimates", async (req, res) => {
   try {
+    console.log("Fetching unique estimates...");
     const sql = `
       SELECT * FROM estimate e1
       WHERE e1.estimate_id = (
@@ -350,8 +431,10 @@ router.get("/get-unique-estimates", async (req, res) => {
         FROM estimate e2
         WHERE e1.estimate_number = e2.estimate_number
       )
+      ORDER BY e1.estimate_id DESC
     `;
     const [results] = await db.query(sql);
+    console.log(`Found ${results.length} unique estimates`);
     res.json(results);
   } catch (err) {
     res.status(500).json({ message: "Error fetching data", error: err.message });
@@ -364,9 +447,17 @@ router.get("/get-estimates/:estimate_number", async (req, res) => {
     const estNum = req.params.estimate_number;
     if (!estNum) return res.status(400).json({ message: "Estimate number is required" });
 
-    const [results] = await db.query("SELECT * FROM estimate WHERE estimate_number=?", [estNum]);
-    if (!results.length) return res.status(404).json({ message: "No data found for given estimate number" });
+    console.log(`Fetching estimates for: ${estNum}`);
+    
+    const [results] = await db.query("SELECT * FROM estimate WHERE estimate_number=? ORDER BY estimate_id", [estNum]);
+    
+    if (!results.length) {
+      console.log(`No data found for estimate number: ${estNum}`);
+      return res.status(404).json({ message: "No data found for given estimate number" });
+    }
 
+    console.log(`Found ${results.length} records for estimate number: ${estNum}`);
+    
     const uniqueData = {
       date: results[0].date,
       estimate_number: results[0].estimate_number,
@@ -374,8 +465,11 @@ router.get("/get-estimates/:estimate_number", async (req, res) => {
       taxable_amount: results[0].taxable_amount,
       tax_amount: results[0].tax_amount,
       net_amount: results[0].net_amount,
-      source_by: results[0].source_by // NEW: Include source_by
+      salesperson_id: results[0].salesperson_id,
+      source_by: results[0].source_by
     };
+
+    console.log("Unique data:", uniqueData);
 
     const repeatedData = results.map(row => ({
       code: row.code, product_id: row.product_id, product_name: row.product_name,
@@ -394,6 +488,29 @@ router.get("/get-estimates/:estimate_number", async (req, res) => {
     res.json({ uniqueData, repeatedData });
   } catch (err) {
     res.status(500).json({ message: "Error fetching data", error: err.message });
+  }
+});
+
+// Debug endpoint to check table structure
+router.get("/debug/table-structure", async (req, res) => {
+  try {
+    const [results] = await db.query(`
+      SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_NAME = 'estimate' 
+      AND TABLE_SCHEMA = DATABASE()
+      ORDER BY ORDINAL_POSITION
+    `);
+    
+    console.log("Table structure for 'estimate':");
+    results.forEach(col => {
+      console.log(`${col.COLUMN_NAME}: ${col.DATA_TYPE} (Nullable: ${col.IS_NULLABLE})`);
+    });
+    
+    res.json(results);
+  } catch (err) {
+    console.error("Error getting table structure:", err);
+    res.status(500).json({ message: "Error getting table structure", error: err.message });
   }
 });
 
