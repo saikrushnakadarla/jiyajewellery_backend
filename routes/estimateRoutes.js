@@ -33,8 +33,15 @@ router.post("/add/estimate", async (req, res) => {
     const salespersonId = data.salesperson_id || "";
     const customerId = data.customer_id || "";
     const customerName = data.customer_name || "";
-    const estimateStatus = data.estimate_status || "Pending";
     const sourceBy = data.source_by || "";
+     // Change it to:
+        let estimateStatus
+        if (data.source_by === "customer") {
+            estimateStatus = "Ordered";  // Customer creates estimates -> Ordered
+        } else {
+            estimateStatus = data.estimate_status || "Pending";  // Admin/salesperson -> Pending
+        }
+
 
     console.log("Extracted values for database:");
     console.log("salespersonId:", salespersonId);
@@ -267,51 +274,95 @@ router.get("/get/estimates-by-source/:source", async (req, res) => {
 });
 
 // Edit estimate status by ID
+// In router.put("/update-estimate-status/:id", update it to:
+
+// Update the backend status update endpoint (estimate.js)
 router.put("/update-estimate-status/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const { estimate_status } = req.body;
-    
-    if (!estimate_status) {
-      return res.status(400).json({ message: "Status is required" });
+    try {
+        const id = req.params.id;
+        const { estimate_status, customer_action } = req.body;
+        
+        if (!estimate_status) {
+            return res.status(400).json({ message: "Status is required" });
+        }
+
+        console.log(`Updating estimate ID ${id} to status: ${estimate_status}`);
+        console.log('Customer action flag:', customer_action);
+
+        // First, check if estimate exists and get current data
+        const [checkResult] = await db.query(
+            "SELECT estimate_id, source_by, estimate_status FROM estimate WHERE estimate_id = ? OR estimate_number = ?",
+            [id, id]
+        );
+
+        if (checkResult.length === 0) {
+            return res.status(404).json({ message: "Estimate not found" });
+        }
+
+        const estimateId = checkResult[0].estimate_id;
+        const sourceBy = checkResult[0].source_by;
+        const currentStatus = checkResult[0].estimate_status;
+
+        // Validate status transition
+        if (sourceBy === "customer") {
+            // Customer-created estimate logic
+            
+            // If estimate is already "Ordered", customer should NOT be able to change it
+            if (currentStatus === "Ordered") {
+                return res.status(400).json({ 
+                    success: false,
+                    message: "Customer cannot change status once estimate is Ordered" 
+                });
+            }
+        } else if (sourceBy === "admin" || sourceBy === "salesman") {
+            // Admin/salesperson created estimate
+            if (customer_action === true && estimate_status === "Accepted") {
+                // Customer is changing admin/salesperson's estimate to Accepted
+                // Store as "Ordered" instead of "Accepted"
+                const finalStatus = "Ordered";
+                
+                const [result] = await db.query(
+                    "UPDATE estimate SET estimate_status = ?, customer_accepted = 1, updated_at = NOW() WHERE estimate_id = ?",
+                    [finalStatus, estimateId]
+                );
+                
+                if (result.affectedRows === 0) {
+                    return res.status(500).json({ message: "Failed to update status" });
+                }
+
+                return res.json({ 
+                    success: true, 
+                    message: "Estimate accepted by customer",
+                    estimate_id: estimateId,
+                    estimate_status: finalStatus,
+                    customer_accepted: true
+                });
+            }
+        }
+
+        // For admin/salesperson changing their own estimates or other cases
+        const [result] = await db.query(
+            "UPDATE estimate SET estimate_status = ?, updated_at = NOW() WHERE estimate_id = ?",
+            [estimate_status, estimateId]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(500).json({ message: "Failed to update status" });
+        }
+
+        res.json({ 
+            success: true, 
+            message: "Estimate status updated successfully",
+            estimate_id: estimateId,
+            estimate_status: estimate_status
+        });
+
+    } catch (err) {
+        console.error("Error updating estimate status:", err);
+        res.status(500).json({ message: "Failed to update estimate status", error: err.message });
     }
-
-    console.log(`Updating estimate ID ${id} to status: ${estimate_status}`);
-
-    // First, check if estimate exists by estimate_number or estimate_id
-    const [checkResult] = await db.query(
-      "SELECT estimate_id FROM estimate WHERE estimate_id = ? OR estimate_number = ?",
-      [id, id]
-    );
-
-    if (checkResult.length === 0) {
-      return res.status(404).json({ message: "Estimate not found" });
-    }
-
-    const estimateId = checkResult[0].estimate_id;
-
-    // Update only the status field
-    const [result] = await db.query(
-      "UPDATE estimate SET estimate_status = ?, updated_at = NOW() WHERE estimate_id = ?",
-      [estimate_status, estimateId]
-    );
-
-    if (result.affectedRows === 0) {
-      return res.status(500).json({ message: "Failed to update status" });
-    }
-
-    res.json({ 
-      success: true, 
-      message: "Estimate status updated successfully",
-      estimate_id: estimateId,
-      estimate_status: estimate_status
-    });
-
-  } catch (err) {
-    console.error("Error updating estimate status:", err);
-    res.status(500).json({ message: "Failed to update estimate status", error: err.message });
-  }
 });
+
 
 // Edit estimate by ID
 router.put("/edit/estimate/:id", async (req, res) => {

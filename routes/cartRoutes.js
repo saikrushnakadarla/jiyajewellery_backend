@@ -293,4 +293,29 @@ router.get('/summary/:userId', async (req, res) => {
     }
 });
 
+// Check if product is in user's cart
+router.get('/check/:userId/:productId', async (req, res) => {
+    try {
+        const { userId, productId } = req.params;
+
+        const [cartItem] = await db.query(
+            'SELECT cart_id FROM cart WHERE user_id = ? AND product_id = ?',
+            [userId, productId]
+        );
+
+        res.json({
+            success: true,
+            inCart: cartItem.length > 0,
+            cartItem: cartItem.length > 0 ? cartItem[0] : null
+        });
+    } catch (error) {
+        console.error('Error checking cart:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error',
+            error: error.message 
+        });
+    }
+});
+
 module.exports = router;
