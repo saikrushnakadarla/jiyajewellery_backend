@@ -8,25 +8,72 @@ const path = require('path');
 const sanitizeNumber = (val, def = 0) => (val === "" || val === null ? def : val);
 const sanitizeNumeric = (val) => (val ? parseFloat(val.toString().replace(/[^\d.]/g, "")) || 0 : 0);
 
-// Add or update estimate
+// Helper function to generate order number (ONLY for print/PDF generation)
+// FIXED: Helper function to generate unique order number
+const generateOrderNumber = async () => {
+  try {
+    // Use a transaction to ensure we get the latest order number
+    const connection = await db.getConnection();
+    
+    try {
+      await connection.beginTransaction();
+      
+      // Get the latest order number from database
+      const [results] = await connection.query(
+        "SELECT order_number FROM estimate WHERE order_number IS NOT NULL AND order_number LIKE 'ORD%' ORDER BY LENGTH(order_number) DESC, order_number DESC LIMIT 1"
+      );
+      
+      let sequence = 1;
+      
+      if (results.length > 0 && results[0].order_number) {
+        const lastOrderNum = results[0].order_number;
+        
+        // Try different formats to extract sequence number
+        // Format 1: ORD001, ORD002 (simple format)
+        if (lastOrderNum.startsWith('ORD') && lastOrderNum.length > 3) {
+          const numPart = lastOrderNum.substring(3);
+          const num = parseInt(numPart, 10);
+          if (!isNaN(num)) {
+            sequence = num + 1;
+          }
+        }
+      }
+      
+      // Generate simple format: ORD001, ORD002, ORD003
+      const orderNumber = `ORD${String(sequence).padStart(3, "0")}`;
+      
+      await connection.commit();
+      
+      console.log(`Generated new order number: ${orderNumber}`);
+      return orderNumber;
+      
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
+    
+  } catch (err) {
+    console.error("Error generating order number:", err);
+    // Fallback: ORD + timestamp
+    const timestamp = Date.now().toString().slice(-6);
+    return `ORD${timestamp}`;
+  }
+};
+
+
+// Update the POST /add/estimate endpoint
 router.post("/add/estimate", async (req, res) => {
   try {
     const data = req.body;
     console.log("=== RECEIVING ESTIMATE DATA ===");
-    console.log("Full request body received:", JSON.stringify(data, null, 2));
-    
-    // Log the specific fields we're interested in
-    console.log("salesperson_id from request:", data.salesperson_id);
-    console.log("source_by from request:", data.source_by);
-    console.log("customer_id from request:", data.customer_id);
-    console.log("customer_name from request:", data.customer_name);
-    console.log("estimate_number from request:", data.estimate_number);
     
     if (!data.date || !data.estimate_number) {
       return res.status(400).json({ message: "Missing required fields: date and estimate_number" });
     }
 
-    // Extract fields with proper fallbacks
+    // Extract fields
     const code = data.code || data.barcode || "";
     const category = data.category || "";
     const subCategory = data.sub_category || "";
@@ -34,20 +81,23 @@ router.post("/add/estimate", async (req, res) => {
     const customerId = data.customer_id || "";
     const customerName = data.customer_name || "";
     const sourceBy = data.source_by || "";
-     // Change it to:
-        let estimateStatus
-        if (data.source_by === "customer") {
-            estimateStatus = "Ordered";  // Customer creates estimates -> Ordered
-        } else {
-            estimateStatus = data.estimate_status || "Pending";  // Admin/salesperson -> Pending
-        }
+    
+    // IMPORTANT: Generate order number and date when source_by is 'customer'
+    let orderNumber = null;
+    let orderDate = null;
+    
+    if (sourceBy === 'customer') {
+      orderNumber = await generateOrderNumber();
+      orderDate = new Date().toISOString().split('T')[0]; // Today's date
+      console.log('Generated order number for customer:', orderNumber);
+    }
 
-
-    console.log("Extracted values for database:");
-    console.log("salespersonId:", salespersonId);
-    console.log("sourceBy:", sourceBy);
-    console.log("customerId:", customerId);
-    console.log("customerName:", customerName);
+    let estimateStatus;
+    if (sourceBy === "customer") {
+      estimateStatus = "Ordered";  // Customer creates estimates -> Ordered
+    } else {
+      estimateStatus = data.estimate_status || "Pending";  // Admin/salesperson -> Pending
+    }
 
     // 1. Check if estimate already exists
     const [checkResult] = await db.query(
@@ -55,30 +105,35 @@ router.post("/add/estimate", async (req, res) => {
       [data.estimate_number]
     );
 
-    console.log(`Check if estimate exists: ${checkResult[0].count} records found`);
-
     if (checkResult[0].count > 0) {
-      // 2. Update existing estimate
+      // Update existing estimate
       console.log("Updating existing estimate...");
-      const updateSql = `
+      
+      // Build update query with order number/date
+      let updateSql = `
         UPDATE estimate SET
-          date=?, pcode=?, customer_name=?, customer_id=?, salesperson_id=?, source_by=?, estimate_status=?, code=?, product_id=?, product_name=?, metal_type=?, design_name=?,
-          purity=?, category=?, sub_category=?, gross_weight=?, stone_weight=?, stone_price=?,
-          weight_bw=?, va_on=?, va_percent=?, wastage_weight=?, msp_va_percent=?, msp_wastage_weight=?, total_weight_av=?,
-          mc_on=?, mc_per_gram=?, making_charges=?, rate=?, rate_amt=?, tax_percent=?,
-          tax_amt=?, total_price=?, pricing=?, pieace_cost=?, disscount_percentage=?,
-          disscount=?, hm_charges=?, total_amount=?, taxable_amount=?, tax_amount=?, net_amount=?,
-          original_total_price=?, opentag_id=?, qty=?
-        WHERE estimate_number=?`;
-
+          date=?, pcode=?, salesperson_id=?, source_by=?, customer_id=?, customer_name=?, 
+          estimate_status=?, estimate_number=?, order_number=?, order_date=?, 
+          opentag_id=?, code=?, product_id=?, product_name=?, metal_type=?, design_name=?, purity=?,
+          category=?, sub_category=?, gross_weight=?, stone_weight=?, stone_price=?, 
+          weight_bw=?, va_on=?, va_percent=?, wastage_weight=?, msp_va_percent=?, 
+          msp_wastage_weight=?, total_weight_av=?, mc_on=?, mc_per_gram=?, making_charges=?, 
+          rate=?, rate_amt=?, tax_percent=?, tax_amt=?, total_price=?, pricing=?, pieace_cost=?, 
+          disscount_percentage=?, disscount=?, hm_charges=?, total_amount=?, taxable_amount=?, 
+          tax_amount=?, net_amount=?, original_total_price=?, qty=?`;
+      
       const updateValues = [
         data.date,
         data.pcode || null,
-        customerName,
-        customerId,
         salespersonId,
         sourceBy,
+        customerId,
+        customerName,
         estimateStatus,
+        data.estimate_number,
+        orderNumber, // Now may have value for customer
+        orderDate,   // Now may have value for customer
+        sanitizeNumber(data.opentag_id),
         code,
         data.product_id,
         data.product_name,
@@ -115,53 +170,55 @@ router.post("/add/estimate", async (req, res) => {
         sanitizeNumber(data.tax_amount),
         sanitizeNumber(data.net_amount),
         sanitizeNumber(data.original_total_price),
-        sanitizeNumber(data.opentag_id),
-        sanitizeNumber(data.qty),
-        data.estimate_number,
+        sanitizeNumber(data.qty)
       ];
-
+      
+      updateSql += ` WHERE estimate_number=?`;
+      updateValues.push(data.estimate_number);
+      
       console.log("Update SQL:", updateSql);
-      console.log("Update values (first 10):", updateValues.slice(0, 10));
-      console.log("salespersonId in updateValues:", updateValues[4]);
-      console.log("sourceBy in updateValues:", updateValues[5]);
+      console.log("Order number being set:", orderNumber);
+      console.log("Order date being set:", orderDate);
       
       const [updateResult] = await db.query(updateSql, updateValues);
-      console.log("Update result:", updateResult);
-      console.log(`Rows affected: ${updateResult.affectedRows}`);
-
-      // Verify the update worked
-      const [verifyResult] = await db.query(
-        "SELECT salesperson_id, source_by FROM estimate WHERE estimate_number = ?",
-        [data.estimate_number]
-      );
-      console.log("Verification after update:", verifyResult[0]);
-
+      
       return res.status(200).json({ 
         message: "Estimate updated successfully",
-        salesperson_id: salespersonId,
-        source_by: sourceBy
+        estimate_number: data.estimate_number,
+        order_number: orderNumber, // Return generated order number
+        order_date: orderDate      // Return order date
       });
     } else {
-      // 3. Insert new estimate
+      // Insert new estimate with order number/date
       console.log("Inserting new estimate...");
+      console.log("Order number for insertion:", orderNumber);
+      console.log("Order date for insertion:", orderDate);
+      
+      // Insert SQL with order number and date
       const insertSql = `
         INSERT INTO estimate (
-          date, pcode, customer_name, customer_id, salesperson_id, source_by, estimate_status, estimate_number, code, product_id, product_name, metal_type, design_name, purity,
-          category, sub_category, gross_weight, stone_weight, stone_price, weight_bw, va_on, va_percent, wastage_weight, 
-          msp_va_percent, msp_wastage_weight, total_weight_av, mc_on, mc_per_gram, making_charges, rate, rate_amt, tax_percent,
-          tax_amt, total_price, pricing, pieace_cost, disscount_percentage, disscount, hm_charges, total_amount,
-          taxable_amount, tax_amount, net_amount, original_total_price, opentag_id, qty
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+          date, pcode, salesperson_id, source_by, customer_id, customer_name, 
+          estimate_number, order_number, order_date, opentag_id, code, product_id, 
+          product_name, metal_type, design_name, purity, category, sub_category, 
+          gross_weight, stone_weight, stone_price, weight_bw, va_on, va_percent, 
+          wastage_weight, msp_va_percent, msp_wastage_weight, total_weight_av, 
+          mc_on, mc_per_gram, making_charges, rate, rate_amt, tax_percent, 
+          tax_amt, total_price, pricing, pieace_cost, disscount_percentage, 
+          disscount, hm_charges, total_amount, taxable_amount, tax_amount, 
+          net_amount, estimate_status, original_total_price, qty
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
 
       const insertValues = [
         data.date,
         data.pcode || null,
-        customerName,
-        customerId,
         salespersonId,
         sourceBy,
-        estimateStatus,
+        customerId,
+        customerName,
         data.estimate_number,
+        orderNumber, // Now may have value for customer
+        orderDate,   // Now may have value for customer
+        sanitizeNumber(data.opentag_id),
         code,
         data.product_id,
         data.product_name,
@@ -197,41 +254,88 @@ router.post("/add/estimate", async (req, res) => {
         sanitizeNumber(data.taxable_amount),
         sanitizeNumber(data.tax_amount),
         sanitizeNumber(data.net_amount),
+        estimateStatus,
         sanitizeNumber(data.original_total_price),
-        sanitizeNumber(data.opentag_id),
-        sanitizeNumber(data.qty),
+        sanitizeNumber(data.qty)
       ];
 
       console.log("Insert SQL:", insertSql);
-      console.log("Insert values (first 10):", insertValues.slice(0, 10));
-      console.log("salespersonId in insertValues:", insertValues[4]);
-      console.log("sourceBy in insertValues:", insertValues[5]);
       
       const [result] = await db.query(insertSql, insertValues);
-      console.log("Insert result:", result);
-      console.log(`Insert ID: ${result.insertId}`);
-
-      // Verify the insert worked
-      const [verifyResult] = await db.query(
-        "SELECT salesperson_id, source_by FROM estimate WHERE estimate_id = ?",
-        [result.insertId]
-      );
-      console.log("Verification after insert:", verifyResult[0]);
 
       return res.status(200).json({ 
         message: "Estimate added successfully", 
         id: result.insertId,
         estimate_number: data.estimate_number,
-        salesperson_id: salespersonId,
-        source_by: sourceBy
+        order_number: orderNumber, // Return generated order number
+        order_date: orderDate      // Return order date
       });
     }
   } catch (err) {
-    console.error("=== ERROR INSERTING/UPDATING ESTIMATE ===");
-    console.error("Error message:", err.message);
-    console.error("Error stack:", err.stack);
-    console.error("Request body that caused error:", req.body);
+    console.error("Error inserting/updating estimate:", err);
+    console.error("Error SQL:", err.sql);
     res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// NEW: Generate and assign order number when printing PDF
+router.post("/generate-order-number/:estimate_number", async (req, res) => {
+  try {
+    const estimateNumber = req.params.estimate_number;
+    
+    if (!estimateNumber) {
+      return res.status(400).json({ message: "Estimate number is required" });
+    }
+
+    console.log(`Generating order number for estimate: ${estimateNumber}`);
+
+    // First, check if estimate exists and already has an order number
+    const [checkResult] = await db.query(
+      "SELECT estimate_id, order_number FROM estimate WHERE estimate_number = ?",
+      [estimateNumber]
+    );
+
+    if (checkResult.length === 0) {
+      return res.status(404).json({ message: "Estimate not found" });
+    }
+
+    const estimateId = checkResult[0].estimate_id;
+    const existingOrderNumber = checkResult[0].order_number;
+
+    // If already has an order number, return it
+    if (existingOrderNumber) {
+      return res.status(200).json({ 
+        success: true, 
+        message: "Order number already exists",
+        order_number: existingOrderNumber,
+        order_date: new Date().toISOString().split('T')[0]
+      });
+    }
+
+    // Generate new order number
+    const orderNumber = await generateOrderNumber();
+    const orderDate = new Date().toISOString().split('T')[0];
+
+    // Update the estimate with order number and date
+    const [updateResult] = await db.query(
+      "UPDATE estimate SET order_number = ?, order_date = ?, updated_at = NOW() WHERE estimate_id = ?",
+      [orderNumber, orderDate, estimateId]
+    );
+
+    if (updateResult.affectedRows === 0) {
+      return res.status(500).json({ message: "Failed to update order number" });
+    }
+
+    res.status(200).json({ 
+      success: true, 
+      message: "Order number generated successfully",
+      order_number: orderNumber,
+      order_date: orderDate
+    });
+
+  } catch (err) {
+    console.error("Error generating order number:", err);
+    res.status(500).json({ message: "Failed to generate order number", error: err.message });
   }
 });
 
@@ -241,16 +345,6 @@ router.get("/get/estimates", async (req, res) => {
     console.log("Fetching all estimates...");
     const [results] = await db.query("SELECT * FROM estimate ORDER BY estimate_id DESC");
     console.log(`Found ${results.length} estimates`);
-    
-    // Log a sample of what's stored
-    if (results.length > 0) {
-      console.log("Sample estimate record:");
-      console.log("estimate_id:", results[0].estimate_id);
-      console.log("salesperson_id:", results[0].salesperson_id);
-      console.log("source_by:", results[0].source_by);
-      console.log("estimate_number:", results[0].estimate_number);
-    }
-    
     res.json(results);
   } catch (err) {
     console.error("Error fetching estimates:", err);
@@ -258,7 +352,7 @@ router.get("/get/estimates", async (req, res) => {
   }
 });
 
-// NEW: Get estimates by source (admin, salesperson, customer)
+// Get estimates by source (admin, salesperson, customer)
 router.get("/get/estimates-by-source/:source", async (req, res) => {
   try {
     const source = req.params.source;
@@ -273,96 +367,79 @@ router.get("/get/estimates-by-source/:source", async (req, res) => {
   }
 });
 
-// Edit estimate status by ID
-// In router.put("/update-estimate-status/:id", update it to:
-
-// Update the backend status update endpoint (estimate.js)
+// Update the Edit estimate status by ID endpoint - FIXED VERSION
 router.put("/update-estimate-status/:id", async (req, res) => {
-    try {
-        const id = req.params.id;
-        const { estimate_status, customer_action } = req.body;
-        
-        if (!estimate_status) {
-            return res.status(400).json({ message: "Status is required" });
-        }
-
-        console.log(`Updating estimate ID ${id} to status: ${estimate_status}`);
-        console.log('Customer action flag:', customer_action);
-
-        // First, check if estimate exists and get current data
-        const [checkResult] = await db.query(
-            "SELECT estimate_id, source_by, estimate_status FROM estimate WHERE estimate_id = ? OR estimate_number = ?",
-            [id, id]
-        );
-
-        if (checkResult.length === 0) {
-            return res.status(404).json({ message: "Estimate not found" });
-        }
-
-        const estimateId = checkResult[0].estimate_id;
-        const sourceBy = checkResult[0].source_by;
-        const currentStatus = checkResult[0].estimate_status;
-
-        // Validate status transition
-        if (sourceBy === "customer") {
-            // Customer-created estimate logic
-            
-            // If estimate is already "Ordered", customer should NOT be able to change it
-            if (currentStatus === "Ordered") {
-                return res.status(400).json({ 
-                    success: false,
-                    message: "Customer cannot change status once estimate is Ordered" 
-                });
-            }
-        } else if (sourceBy === "admin" || sourceBy === "salesman") {
-            // Admin/salesperson created estimate
-            if (customer_action === true && estimate_status === "Accepted") {
-                // Customer is changing admin/salesperson's estimate to Accepted
-                // Store as "Ordered" instead of "Accepted"
-                const finalStatus = "Ordered";
-                
-                const [result] = await db.query(
-                    "UPDATE estimate SET estimate_status = ?, customer_accepted = 1, updated_at = NOW() WHERE estimate_id = ?",
-                    [finalStatus, estimateId]
-                );
-                
-                if (result.affectedRows === 0) {
-                    return res.status(500).json({ message: "Failed to update status" });
-                }
-
-                return res.json({ 
-                    success: true, 
-                    message: "Estimate accepted by customer",
-                    estimate_id: estimateId,
-                    estimate_status: finalStatus,
-                    customer_accepted: true
-                });
-            }
-        }
-
-        // For admin/salesperson changing their own estimates or other cases
-        const [result] = await db.query(
-            "UPDATE estimate SET estimate_status = ?, updated_at = NOW() WHERE estimate_id = ?",
-            [estimate_status, estimateId]
-        );
-
-        if (result.affectedRows === 0) {
-            return res.status(500).json({ message: "Failed to update status" });
-        }
-
-        res.json({ 
-            success: true, 
-            message: "Estimate status updated successfully",
-            estimate_id: estimateId,
-            estimate_status: estimate_status
-        });
-
-    } catch (err) {
-        console.error("Error updating estimate status:", err);
-        res.status(500).json({ message: "Failed to update estimate status", error: err.message });
+  try {
+    const id = req.params.id;
+    const { estimate_status } = req.body;
+    
+    if (!estimate_status) {
+      return res.status(400).json({ message: "Status is required" });
     }
-});
 
+    console.log(`Updating estimate ID ${id} to status: ${estimate_status}`);
+
+    // First, check if estimate exists and get current data
+    const [checkResult] = await db.query(
+      "SELECT estimate_id, source_by, estimate_status, order_number, estimate_number FROM estimate WHERE estimate_id = ? OR estimate_number = ?",
+      [id, id]
+    );
+
+    if (checkResult.length === 0) {
+      return res.status(404).json({ message: "Estimate not found" });
+    }
+
+    const estimateId = checkResult[0].estimate_id;
+    const currentOrderNumber = checkResult[0].order_number;
+    const sourceBy = checkResult[0].source_by;
+
+    // If status is being changed to "Ordered" AND order_number is null/empty
+    // Generate order number and date
+    let orderNumber = currentOrderNumber;
+    let orderDate = null;
+
+    if (estimate_status === "Ordered" && (!currentOrderNumber || currentOrderNumber.trim() === "")) {
+      // Generate order number
+      orderNumber = await generateOrderNumber();
+      orderDate = new Date().toISOString().split('T')[0];
+      console.log(`Generated order number for estimate ${checkResult[0].estimate_number}: ${orderNumber}`);
+    }
+
+    // Build update query
+    let updateSql = "UPDATE estimate SET estimate_status = ?, updated_at = NOW()";
+    const updateValues = [estimate_status];
+
+    if (orderNumber && orderNumber !== currentOrderNumber) {
+      updateSql += ", order_number = ?, order_date = ?";
+      updateValues.push(orderNumber, orderDate);
+    }
+
+    updateSql += " WHERE estimate_id = ?";
+    updateValues.push(estimateId);
+
+    console.log("Update SQL:", updateSql);
+    console.log("Update values:", updateValues);
+
+    const [result] = await db.query(updateSql, updateValues);
+
+    if (result.affectedRows === 0) {
+      return res.status(500).json({ message: "Failed to update status" });
+    }
+
+    res.json({ 
+      success: true, 
+      message: "Estimate status updated successfully",
+      estimate_id: estimateId,
+      estimate_status: estimate_status,
+      order_number: orderNumber || currentOrderNumber,
+      order_date: orderDate
+    });
+
+  } catch (err) {
+    console.error("Error updating estimate status:", err);
+    res.status(500).json({ message: "Failed to update estimate status", error: err.message });
+  }
+});
 
 // Edit estimate by ID
 router.put("/edit/estimate/:id", async (req, res) => {
@@ -471,6 +548,17 @@ router.get("/lastEstimateNumber", async (req, res) => {
   }
 });
 
+// Get next order number (preview only)
+router.get("/next-order-number", async (req, res) => {
+  try {
+    const orderNumber = await generateOrderNumber();
+    res.json({ order_number: orderNumber });
+  } catch (err) {
+    console.error("Error getting next order number:", err);
+    res.status(500).json({ message: "Failed to generate order number", error: err.message });
+  }
+});
+
 // Get unique estimates
 router.get("/get-unique-estimates", async (req, res) => {
   try {
@@ -512,6 +600,8 @@ router.get("/get-estimates/:estimate_number", async (req, res) => {
     const uniqueData = {
       date: results[0].date,
       estimate_number: results[0].estimate_number,
+      order_number: results[0].order_number,
+      order_date: results[0].order_date,
       total_amount: results[0].total_amount,
       taxable_amount: results[0].taxable_amount,
       tax_amount: results[0].tax_amount,
@@ -539,29 +629,6 @@ router.get("/get-estimates/:estimate_number", async (req, res) => {
     res.json({ uniqueData, repeatedData });
   } catch (err) {
     res.status(500).json({ message: "Error fetching data", error: err.message });
-  }
-});
-
-// Debug endpoint to check table structure
-router.get("/debug/table-structure", async (req, res) => {
-  try {
-    const [results] = await db.query(`
-      SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT 
-      FROM INFORMATION_SCHEMA.COLUMNS 
-      WHERE TABLE_NAME = 'estimate' 
-      AND TABLE_SCHEMA = DATABASE()
-      ORDER BY ORDINAL_POSITION
-    `);
-    
-    console.log("Table structure for 'estimate':");
-    results.forEach(col => {
-      console.log(`${col.COLUMN_NAME}: ${col.DATA_TYPE} (Nullable: ${col.IS_NULLABLE})`);
-    });
-    
-    res.json(results);
-  } catch (err) {
-    console.error("Error getting table structure:", err);
-    res.status(500).json({ message: "Error getting table structure", error: err.message });
   }
 });
 
