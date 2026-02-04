@@ -368,6 +368,7 @@ router.get("/get/estimates-by-source/:source", async (req, res) => {
 });
 
 // Update the Edit estimate status by ID endpoint - FIXED VERSION
+// Update estimate status by ID - FIXED VERSION
 router.put("/update-estimate-status/:id", async (req, res) => {
   try {
     const id = req.params.id;
@@ -377,11 +378,11 @@ router.put("/update-estimate-status/:id", async (req, res) => {
       return res.status(400).json({ message: "Status is required" });
     }
 
-    console.log(`Updating estimate ID ${id} to status: ${estimate_status}`);
+    console.log(`Updating estimate with identifier: ${id} to status: ${estimate_status}`);
 
-    // First, check if estimate exists and get current data
+    // First, check if estimate exists - try both estimate_id and estimate_number
     const [checkResult] = await db.query(
-      "SELECT estimate_id, source_by, estimate_status, order_number, estimate_number FROM estimate WHERE estimate_id = ? OR estimate_number = ?",
+      "SELECT estimate_id, estimate_number, source_by, estimate_status, order_number FROM estimate WHERE estimate_id = ? OR estimate_number = ? LIMIT 1",
       [id, id]
     );
 
@@ -390,26 +391,42 @@ router.put("/update-estimate-status/:id", async (req, res) => {
     }
 
     const estimateId = checkResult[0].estimate_id;
+    const estimateNumber = checkResult[0].estimate_number;
     const currentOrderNumber = checkResult[0].order_number;
     const sourceBy = checkResult[0].source_by;
 
+    // Check if estimate already has an order number
+    if (currentOrderNumber && currentOrderNumber.trim() !== '') {
+      return res.status(400).json({ 
+        message: "Cannot change status once order number is generated",
+        order_number: currentOrderNumber 
+      });
+    }
+
+    // If estimate was created by customer, don't allow status changes from frontend
+    if (sourceBy === "customer") {
+      return res.status(400).json({ 
+        message: "Customer-created estimates cannot be modified from frontend" 
+      });
+    }
+
     // If status is being changed to "Ordered" AND order_number is null/empty
     // Generate order number and date
-    let orderNumber = currentOrderNumber;
+    let orderNumber = null;
     let orderDate = null;
 
-    if (estimate_status === "Ordered" && (!currentOrderNumber || currentOrderNumber.trim() === "")) {
+    if (estimate_status === "Ordered") {
       // Generate order number
       orderNumber = await generateOrderNumber();
       orderDate = new Date().toISOString().split('T')[0];
-      console.log(`Generated order number for estimate ${checkResult[0].estimate_number}: ${orderNumber}`);
+      console.log(`Generated order number for estimate ${estimateNumber}: ${orderNumber}`);
     }
 
     // Build update query
     let updateSql = "UPDATE estimate SET estimate_status = ?, updated_at = NOW()";
     const updateValues = [estimate_status];
 
-    if (orderNumber && orderNumber !== currentOrderNumber) {
+    if (orderNumber) {
       updateSql += ", order_number = ?, order_date = ?";
       updateValues.push(orderNumber, orderDate);
     }
@@ -430,8 +447,9 @@ router.put("/update-estimate-status/:id", async (req, res) => {
       success: true, 
       message: "Estimate status updated successfully",
       estimate_id: estimateId,
+      estimate_number: estimateNumber,
       estimate_status: estimate_status,
-      order_number: orderNumber || currentOrderNumber,
+      order_number: orderNumber,
       order_date: orderDate
     });
 
@@ -440,6 +458,7 @@ router.put("/update-estimate-status/:id", async (req, res) => {
     res.status(500).json({ message: "Failed to update estimate status", error: err.message });
   }
 });
+
 
 // Edit estimate by ID
 router.put("/edit/estimate/:id", async (req, res) => {
