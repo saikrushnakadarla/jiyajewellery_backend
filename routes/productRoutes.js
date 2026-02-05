@@ -5,6 +5,70 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
+// Configure multer for PDF uploads
+const pdfStorage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadDir = 'uploads/invoices';
+    // Create directory if it doesn't exist
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const originalName = file.originalname;
+    const extension = path.extname(originalName);
+    cb(null, originalName);
+  }
+});
+
+const pdfUpload = multer({
+  storage: pdfStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit for PDF
+  fileFilter: function (req, file, cb) {
+    const filetypes = /pdf/;
+    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = filetypes.test(file.mimetype);
+    
+    if (mimetype && extname) {
+      return cb(null, true);
+    } else {
+      cb(new Error('Only PDF files are allowed!'));
+    }
+  }
+});
+
+// POST route to upload invoice PDF
+router.post('/upload-invoice', pdfUpload.single('invoice'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+    
+    console.log('Invoice PDF uploaded:', req.file.filename);
+    res.status(200).json({ 
+      message: 'Invoice PDF uploaded successfully',
+      filename: req.file.filename 
+    });
+  } catch (error) {
+    console.error('Error uploading invoice:', error);
+    res.status(500).json({ message: 'Error uploading invoice', error: error.message });
+  }
+});
+
+// GET route to serve invoice PDF
+router.get('/invoices/:filename', (req, res) => {
+  const { filename } = req.params;
+  const filePath = path.join(__dirname, '../uploads/invoices', filename);
+  
+  if (fs.existsSync(filePath)) {
+    res.sendFile(filePath);
+  } else {
+    res.status(404).json({ message: 'Invoice not found' });
+  }
+});
+
+
 // Configure multer for image upload
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -324,6 +388,49 @@ router.delete('/delete/product/:product_id', async (req, res) => {
     res.status(500).json({ message: 'Database error' });
   }
 });
+
+
+// Add this function to update product with QR code status
+router.put('/update-product-qr/:product_id', async (req, res) => {
+  const { product_id } = req.params;
+  const { qr_generated } = req.body;
+
+  try {
+    const [result] = await db.query(
+      `UPDATE product SET qr_generated = ? WHERE product_id = ?`,
+      [qr_generated, product_id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+
+    res.status(200).json({ 
+      message: 'QR status updated successfully'
+    });
+  } catch (err) {
+    console.error('Error updating QR status:', err);
+    res.status(500).json({ message: 'Database error', error: err.message });
+  }
+});
+
+// Update GET products to include QR status
+router.get('/get/products', async (req, res) => {
+  try {
+    const [rows] = await db.query(`SELECT * FROM product`);
+    // Parse images JSON string to array
+    const products = rows.map(product => ({
+      ...product,
+      images: product.images ? JSON.parse(product.images) : [],
+      qr_generated: product.qr_generated || false
+    }));
+    res.status(200).json(products);
+  } catch (err) {
+    console.error('Error fetching products:', err);
+    res.status(500).json({ message: 'Database error' });
+  }
+});
+
 
 // Serve uploaded images statically
 router.use('/uploads', express.static('uploads'));
