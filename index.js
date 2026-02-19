@@ -32,7 +32,7 @@ app.use('/', designMasterRoutes);
 app.use('/', categoryRoutes);
 app.use('/', productRoutes);
 app.use('/', estimateRoutes);
-app.use('/', attendanceRoutes);
+app.use('/api/attendance', attendanceRoutes);
 app.use('/api/cart', cartRoutes);
 
 // Default route
