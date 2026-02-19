@@ -20,6 +20,7 @@ const productRoutes = require('./routes/productRoutes');
 const estimateRoutes = require('./routes/estimateRoutes');
 const ratesRoutes = require('./routes/ratesRoutes');
 const cartRoutes = require('./routes/cartRoutes');
+const attendanceRoutes = require('./routes/attendanceRoutes');
 
 
 // Use routes
@@ -31,6 +32,7 @@ app.use('/', designMasterRoutes);
 app.use('/', categoryRoutes);
 app.use('/', productRoutes);
 app.use('/', estimateRoutes);
+app.use('/', attendanceRoutes);
 app.use('/api/cart', cartRoutes);
 
 // Default route
