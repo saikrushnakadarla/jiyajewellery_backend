@@ -332,31 +332,67 @@ router.get('/history/:salesperson_id', async (req, res) => {
 });
 
 // ADMIN: Get all attendance for a specific date
+// ADMIN: Get all attendance for a specific date (improved version)
 router.get('/admin/daily/:date', async (req, res) => {
   try {
     const { date } = req.params;
 
+    // First, get all salespersons
+    const [salespersons] = await db.query(
+      `SELECT id, full_name, email_id as email, phone 
+       FROM users 
+       WHERE role = 'salesman' OR role = 'Salesman' OR role = 'SALESMAN'`
+    );
+
+    // Then get attendance records for the date
     const [attendance] = await db.query(
-      `SELECT sa.*, u.email, u.phone, u.full_name as user_full_name
+      `SELECT sa.* 
        FROM salesperson_attendance sa
-       JOIN users u ON sa.salesperson_id = u.id
-       WHERE sa.date = ?
-       ORDER BY sa.check_in_time DESC`,
+       WHERE sa.date = ?`,
       [date]
     );
 
+    // Create a map of attendance records by salesperson_id
+    const attendanceMap = {};
+    attendance.forEach(record => {
+      attendanceMap[record.salesperson_id] = record;
+    });
+
+    // Combine salespersons with their attendance records
+    const combinedData = salespersons.map(sp => {
+      const attendanceRecord = attendanceMap[sp.id] || {};
+      return {
+        id: attendanceRecord.id || null,
+        salesperson_id: sp.id,
+        salesperson_name: sp.full_name,
+        email: sp.email,
+        phone: sp.phone,
+        date: date,
+        check_in_time: attendanceRecord.check_in_time || null,
+        check_out_time: attendanceRecord.check_out_time || null,
+        working_hours: attendanceRecord.working_hours || null,
+        status: attendanceRecord.status || 'absent',
+        check_in_location: attendanceRecord.check_in_location || null,
+        check_out_location: attendanceRecord.check_out_location || null,
+        check_in_photo: attendanceRecord.check_in_photo || null,
+        check_out_photo: attendanceRecord.check_out_photo || null,
+        check_in_remarks: attendanceRecord.check_in_remarks || null,
+        check_out_remarks: attendanceRecord.check_out_remarks || null
+      };
+    });
+
     const summary = {
-      total_salespersons: attendance.length,
-      present: attendance.filter(a => a.status === 'present').length,
-      late: attendance.filter(a => a.status === 'late').length,
-      half_day: attendance.filter(a => a.status === 'half_day').length,
-      absent: attendance.filter(a => a.status === 'absent').length
+      total_salespersons: salespersons.length,
+      present: combinedData.filter(a => a.status === 'present').length,
+      late: combinedData.filter(a => a.status === 'late').length,
+      half_day: combinedData.filter(a => a.status === 'half_day').length,
+      absent: combinedData.filter(a => a.status === 'absent').length
     };
 
     res.status(200).json({
       success: true,
       data: {
-        attendance,
+        attendance: combinedData,
         summary
       }
     });
