@@ -21,6 +21,7 @@ const estimateRoutes = require('./routes/estimateRoutes');
 const ratesRoutes = require('./routes/ratesRoutes');
 const cartRoutes = require('./routes/cartRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
+const companyRoutes = require('./routes/companyInfoRoutes');
 
 
 // Use routes
@@ -34,6 +35,7 @@ app.use('/', productRoutes);
 app.use('/', estimateRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/cart', cartRoutes);
+app.use('/', companyRoutes);
 
 // Default route
 app.get('/', (req, res) => {
