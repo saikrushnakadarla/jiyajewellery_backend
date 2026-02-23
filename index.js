@@ -22,6 +22,7 @@ const ratesRoutes = require('./routes/ratesRoutes');
 const cartRoutes = require('./routes/cartRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
 const companyRoutes = require('./routes/companyInfoRoutes');
+const visitLogsRoutes = require('./routes/visitRoutes');
 
 
 // Use routes
@@ -36,6 +37,7 @@ app.use('/', estimateRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/cart', cartRoutes);
 app.use('/', companyRoutes);
+app.use('/visit-logs', visitLogsRoutes);
 
 // Default route
 app.get('/', (req, res) => {
