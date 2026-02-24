@@ -287,4 +287,26 @@ router.get("/statistics/:salesperson_id", async (req, res) => {
   }
 });
 
+
+// Get today's visit logs status for a salesperson
+router.get("/today-status/:salespersonId", async (req, res) => {
+  try {
+    const { salespersonId } = req.params;
+    const today = new Date().toISOString().split('T')[0];
+    
+    const [rows] = await db.query(
+      'SELECT COUNT(*) as count FROM visit_logs WHERE salesperson_id = ? AND DATE(visit_date) = ?',
+      [salespersonId, today]
+    );
+    
+    res.json({
+      success: true,
+      hasLogs: rows[0].count > 0
+    });
+  } catch (error) {
+    console.error('Error checking today\'s visit logs:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 module.exports = router;

@@ -603,6 +603,56 @@ router.delete('/admin/delete/:id', async (req, res) => {
   }
 });
 
+
+// Add this new route to your attendanceRoutes.js file
+// GEocode address from coordinates (proxy for OpenStreetMap)
+router.get('/geocode', async (req, res) => {
+  try {
+    const { lat, lon } = req.query;
+    
+    if (!lat || !lon) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Latitude and longitude are required' 
+      });
+    }
+
+    // Make request to OpenStreetMap from server side (no CORS issues)
+    const response = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`,
+      {
+        headers: {
+          'Accept-Language': 'en-US,en;q=0.9',
+          'User-Agent': 'YourAppName/1.0' // Replace with your app name
+        }
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`OpenStreetMap API responded with status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        display_name: data.display_name || `Location: ${lat}, ${lon}`,
+        address: data.address || {}
+      }
+    });
+
+  } catch (error) {
+    console.error('Geocoding error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to get address from coordinates',
+      error: error.message 
+    });
+  }
+});
+
+
 // Serve uploaded photos statically
 router.use('/uploads', express.static('uploads'));
 
