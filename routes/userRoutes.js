@@ -289,24 +289,40 @@ router.delete('/api/users/:id', async (req, res) => {
 });
 
 /* LOGIN (match by email_id and password) */
+/* LOGIN (match by email_id OR phone number) */
 router.post('/api/users/login', async (req, res) => {
   try {
     const { email_id, password } = req.body;
     if (!email_id || !password) {
-      return res.status(400).json({ message: 'email_id and password are required' });
+      return res.status(400).json({ message: 'email_id/phone and password are required' });
     }
 
-    const [rows] = await db.query('SELECT * FROM users WHERE email_id = ?', [email_id]);
+    // Check if the input is an email or phone number
+    const isEmail = email_id.includes('@');
+    let query;
+    let queryParams;
+
+    if (isEmail) {
+      // Login with email
+      query = 'SELECT * FROM users WHERE email_id = ?';
+      queryParams = [email_id];
+    } else {
+      // Login with phone number
+      query = 'SELECT * FROM users WHERE phone = ?';
+      queryParams = [email_id];
+    }
+
+    const [rows] = await db.query(query, queryParams);
 
     if (rows.length === 0) {
-      return res.status(401).json({ message: 'Invalid email_id or password' });
+      return res.status(401).json({ message: 'Invalid email/phone or password' });
     }
 
     const user = rows[0];
 
     // Compare plain text password (since stored as plain text here)
     if (password !== user.password) {
-      return res.status(401).json({ message: 'Invalid email_id or password' });
+      return res.status(401).json({ message: 'Invalid email/phone or password' });
     }
 
     // Optionally update last_login_date
