@@ -5,7 +5,7 @@ const nodemailer = require('nodemailer');
 
 // Email configuration
 const transporter = nodemailer.createTransport({
-  service: 'gmail', // or your email service
+  service: 'gmail',
   auth: {
     user: process.env.EMAIL_USER || 'your-email@gmail.com',
     pass: process.env.EMAIL_PASS || 'your-app-password'
@@ -40,13 +40,16 @@ const sendOTPEmail = async (email, customerName, otp) => {
   return await transporter.sendMail(mailOptions);
 };
 
-// Get all customers (for dropdown) - FIXED: Using correct column names
+// Get all customers (for dropdown) - Updated to include location data
 router.get("/customers", async (req, res) => {
   try {
-    console.log("Fetching all customers...");
-    // Using email_id instead of email
+    console.log("Fetching all customers with location data...");
     const [results] = await db.query(
-      "SELECT id, full_name, email_id as email, phone, role, status FROM users WHERE role = 'Customer' AND status = 'approved' ORDER BY full_name"
+      `SELECT id, full_name, email_id as email, phone, role, status, 
+              latitude, longitude 
+       FROM users 
+       WHERE role = 'Customer' AND status = 'approved' 
+       ORDER BY full_name`
     );
     console.log(`Found ${results.length} customers`);
     res.json(results);
@@ -56,12 +59,13 @@ router.get("/customers", async (req, res) => {
   }
 });
 
-// Get customer by ID - FIXED: Using correct column names
+// Get customer by ID - Updated to include location data
 router.get("/customer/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const [results] = await db.query(
-      "SELECT id, full_name, email_id as email, phone FROM users WHERE id = ?",
+      `SELECT id, full_name, email_id as email, phone, latitude, longitude 
+       FROM users WHERE id = ?`,
       [id]
     );
     
@@ -108,7 +112,7 @@ router.post("/send-otp", async (req, res) => {
   }
 });
 
-// Verify OTP and save visit log
+// Verify OTP and save visit log - Updated to include location data
 router.post("/save-visit-log", async (req, res) => {
   try {
     const { 
@@ -119,7 +123,13 @@ router.post("/save-visit-log", async (req, res) => {
       notes, 
       otp, 
       salesperson_id, 
-      source_by 
+      source_by,
+      salesperson_latitude,
+      salesperson_longitude,
+      customer_latitude,
+      customer_longitude,
+      distance_meters,
+      location_verified
     } = req.body;
 
     // Validate required fields
@@ -129,12 +139,14 @@ router.post("/save-visit-log", async (req, res) => {
       });
     }
 
-    // Insert visit log
+    // Insert visit log with location data
     const insertSql = `
       INSERT INTO visit_logs (
         customer_id, customer_name, visit_date, outcome, notes, otp, 
-        otp_sent_at, otp_verified, otp_verified_at, salesperson_id, source_by
-      ) VALUES (?, ?, ?, ?, ?, ?, NOW(), TRUE, NOW(), ?, ?)
+        otp_sent_at, otp_verified, otp_verified_at, salesperson_id, source_by,
+        salesperson_latitude, salesperson_longitude, customer_latitude, customer_longitude,
+        distance_meters, location_verified
+      ) VALUES (?, ?, ?, ?, ?, ?, NOW(), TRUE, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const [result] = await db.query(insertSql, [
@@ -145,7 +157,13 @@ router.post("/save-visit-log", async (req, res) => {
       notes || null,
       otp,
       salesperson_id,
-      source_by || null
+      source_by || null,
+      salesperson_latitude || null,
+      salesperson_longitude || null,
+      customer_latitude || null,
+      customer_longitude || null,
+      distance_meters || null,
+      location_verified ? 1 : 0
     ]);
 
     res.status(201).json({ 
@@ -160,13 +178,15 @@ router.post("/save-visit-log", async (req, res) => {
   }
 });
 
-// Get visit logs for a salesperson
+// Get visit logs for a salesperson - Updated to include location data
 router.get("/salesperson/:salesperson_id", async (req, res) => {
   try {
     const { salesperson_id } = req.params;
     
     const [results] = await db.query(
-      "SELECT * FROM visit_logs WHERE salesperson_id = ? ORDER BY visit_date DESC, created_at DESC",
+      `SELECT * FROM visit_logs 
+       WHERE salesperson_id = ? 
+       ORDER BY visit_date DESC, created_at DESC`,
       [salesperson_id]
     );
     
@@ -287,7 +307,6 @@ router.get("/statistics/:salesperson_id", async (req, res) => {
   }
 });
 
-
 // Get today's visit logs status for a salesperson
 router.get("/today-status/:salespersonId", async (req, res) => {
   try {
@@ -306,6 +325,44 @@ router.get("/today-status/:salespersonId", async (req, res) => {
   } catch (error) {
     console.error('Error checking today\'s visit logs:', error);
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Geocode endpoint (for reverse geocoding)
+router.get("/geocode", async (req, res) => {
+  try {
+    const { lat, lon } = req.query;
+    
+    if (!lat || !lon) {
+      return res.status(400).json({ success: false, message: "Latitude and longitude are required" });
+    }
+
+    const axios = require('axios');
+    const response = await axios.get('https://nominatim.openstreetmap.org/reverse', {
+      params: {
+        lat: lat,
+        lon: lon,
+        format: 'json',
+        addressdetails: 1,
+        zoom: 18
+      },
+      headers: {
+        'User-Agent': 'SadashriJewels/1.0'
+      },
+      timeout: 5000
+    });
+
+    res.json({
+      success: true,
+      data: response.data
+    });
+  } catch (error) {
+    console.error('Geocoding error:', error.message);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to get address',
+      error: error.message 
+    });
   }
 });
 
