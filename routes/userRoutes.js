@@ -2,13 +2,11 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const nodemailer = require('nodemailer'); // Add this import
+const nodemailer = require('nodemailer');
 
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-
-
 
 // Configure multer for face photo uploads
 const faceStorage = multer.diskStorage({
@@ -41,25 +39,16 @@ const uploadFace = multer({
   }
 });
 
-
-
-// Configure nodemailer (add this configuration)
+// Configure nodemailer
 const transporter = nodemailer.createTransport({
-  service: 'gmail', // or your email service
+  service: 'gmail',
   auth: {
-    user: process.env.EMAIL_USER, // set these in your environment variables
+    user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
   }
 });
 
-/**
- * Expected fields in request body (create / update):
- * full_name, email_id, date_of_birth, gender, designation,
- * date_of_anniversary, country, state, city,
- * password, confirm_password, company_name, role, status, pincode
- */
-
-// Function to send email (add this function)
+// Function to send email
 const sendStatusEmail = async (email, full_name, status, credentials = null) => {
   let subject, html;
   
@@ -87,7 +76,7 @@ const sendStatusEmail = async (email, full_name, status, credentials = null) => 
       <p>Thank you,<br>Administration Team</p>
     `;
   } else {
-    return; // No email for other statuses
+    return;
   }
 
   try {
@@ -110,7 +99,7 @@ router.get('/api/users', async (req, res) => {
     const [results] = await db.query(`
       SELECT id, full_name, email_id, phone, date_of_birth, gender, designation, 
              date_of_anniversary, country, state, city, 
-             company_name, role, status, pincode 
+             company_name, role, status, pincode, latitude, longitude 
       FROM users
     `);
     res.json(results);
@@ -127,7 +116,7 @@ router.get('/api/users/:id', async (req, res) => {
     const [results] = await db.query(`
       SELECT id, full_name, email_id, phone, date_of_birth, gender, designation, 
              date_of_anniversary, country, state, city, 
-             company_name, role, status, pincode , face_photo_path
+             company_name, role, status, pincode, face_photo_path, latitude, longitude 
       FROM users WHERE id = ?
     `, [id]);
 
@@ -159,7 +148,9 @@ router.post('/api/users', uploadFace.single('face_photo'), async (req, res) => {
       role,
       status,
       pincode,
-      face_descriptor
+      face_descriptor,
+      latitude,
+      longitude
     } = req.body;
 
     // Basic validations
@@ -183,8 +174,8 @@ router.post('/api/users', uploadFace.single('face_photo'), async (req, res) => {
         full_name, email_id, phone, date_of_birth, gender, designation,
         date_of_anniversary, country, state, city,
         password, confirm_password, company_name, role, status, pincode,
-        face_descriptor, face_photo_path
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        face_descriptor, face_photo_path, latitude, longitude
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const [result] = await db.query(insertQuery, [
@@ -205,7 +196,9 @@ router.post('/api/users', uploadFace.single('face_photo'), async (req, res) => {
       status || null,
       pincode || null,
       face_descriptor || null,
-      facePhotoPath
+      facePhotoPath,
+      latitude || null,
+      longitude || null
     ]);
 
     res.status(201).json({
@@ -221,7 +214,7 @@ router.post('/api/users', uploadFace.single('face_photo'), async (req, res) => {
   }
 });
 
-/* UPDATE user - Modified to send email on status change */
+/* UPDATE user */
 router.put('/api/users/:id', uploadFace.single('face_photo'), async (req, res) => {
   const { id } = req.params;
   try {
@@ -242,7 +235,9 @@ router.put('/api/users/:id', uploadFace.single('face_photo'), async (req, res) =
       role,
       status,
       pincode,
-      face_descriptor
+      face_descriptor,
+      latitude,
+      longitude
     } = req.body;
 
     // If updating password, ensure confirm matches
@@ -288,6 +283,8 @@ router.put('/api/users/:id', uploadFace.single('face_photo'), async (req, res) =
     if (status !== undefined) { updates.push('status = ?'); params.push(status); }
     if (pincode !== undefined) { updates.push('pincode = ?'); params.push(pincode); }
     if (face_descriptor !== undefined) { updates.push('face_descriptor = ?'); params.push(face_descriptor); }
+    if (latitude !== undefined) { updates.push('latitude = ?'); params.push(latitude); }
+    if (longitude !== undefined) { updates.push('longitude = ?'); params.push(longitude); }
     
     if (req.file) {
       // Delete old photo if exists
@@ -333,7 +330,6 @@ router.put('/api/users/:id', uploadFace.single('face_photo'), async (req, res) =
   }
 });
 
-
 router.post('/api/users/face-login', async (req, res) => {
   try {
     const { face_descriptor } = req.body;
@@ -362,7 +358,7 @@ router.post('/api/users/face-login', async (req, res) => {
     // Find best match
     let bestMatch = null;
     let bestDistance = Infinity;
-    const threshold = 0.6; // Lower threshold = stricter matching
+    const threshold = 0.6;
 
     for (const user of users) {
       if (!user.face_descriptor) continue;
@@ -389,7 +385,6 @@ router.post('/api/users/face-login', async (req, res) => {
 
     // Check if match is within threshold
     if (bestMatch && bestDistance <= threshold) {
-      // Remove sensitive fields
       const safeUser = {
         id: bestMatch.id,
         full_name: bestMatch.full_name,
@@ -418,8 +413,6 @@ router.post('/api/users/face-login', async (req, res) => {
   }
 });
 
-
-
 /* DELETE user */
 router.delete('/api/users/:id', async (req, res) => {
   const { id } = req.params;
@@ -441,9 +434,7 @@ router.delete('/api/users/:id', async (req, res) => {
   }
 });
 
-/* LOGIN (match by email_id and password) */
-/* LOGIN (match by email_id OR phone number) */
-/* LOGIN (match by email_id OR phone number) */
+/* LOGIN */
 router.post('/api/users/login', async (req, res) => {
   try {
     const { email_id, password } = req.body;

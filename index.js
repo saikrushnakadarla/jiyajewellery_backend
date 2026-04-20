@@ -1,6 +1,7 @@
 // index.js
 const express = require('express');
 const app = express();
+const path = require('path'); 
 const PORT = 5000;
 const cors = require('cors');
 const db = require('./db');
@@ -9,6 +10,12 @@ require('dotenv').config(); // Add this line
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/pack-images', express.static(path.join(__dirname, 'uploads', 'pack-images')));
 
 // Import user routes
 const userRoutes = require('./routes/userRoutes'); 
