@@ -14,8 +14,18 @@ app.use(express.json());
 
 
 // Serve static files from uploads directory
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-app.use('/pack-images', express.static(path.join(__dirname, 'uploads', 'pack-images')));
+// Serve static files from uploads directory with proper caching headers
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+  maxAge: '1d',
+  etag: true,
+  lastModified: true
+}));
+
+app.use('/pack-images', express.static(path.join(__dirname, 'uploads', 'pack-images'), {
+  maxAge: '1d',
+  etag: true,
+  lastModified: true
+}));
 
 // Import user routes
 const userRoutes = require('./routes/userRoutes'); 
@@ -31,6 +41,8 @@ const attendanceRoutes = require('./routes/attendanceRoutes');
 const companyRoutes = require('./routes/companyInfoRoutes');
 const visitLogsRoutes = require('./routes/visitRoutes');
 const loanAmountRoutes = require('./routes/loanAmountRoutes');
+const leaveManagementRoutes = require('./routes/leavemanagementRoutes');
+
 
 
 // Use routes
@@ -47,6 +59,8 @@ app.use('/api/cart', cartRoutes);
 app.use('/', companyRoutes);
 app.use('/visit-logs', visitLogsRoutes);
 app.use('/', loanAmountRoutes);
+// Use routes
+app.use('/', leaveManagementRoutes);
 
 // Default route
 app.get('/', (req, res) => {
