@@ -491,6 +491,7 @@ router.post("/update/estimate-with-packet", async (req, res) => {
 });
 
 // Generate order number when printing
+// Generate order number and mark PDF as generated
 router.post("/generate-order-number/:estimate_number", async (req, res) => {
   try {
     const estimateNumber = req.params.estimate_number;
@@ -499,10 +500,10 @@ router.post("/generate-order-number/:estimate_number", async (req, res) => {
       return res.status(400).json({ message: "Estimate number is required" });
     }
 
-    console.log(`Generating order number for estimate: ${estimateNumber}`);
+    console.log(`Generating order number and PDF for estimate: ${estimateNumber}`);
 
     const [checkResult] = await db.query(
-      "SELECT estimate_id, order_number FROM estimate WHERE estimate_number = ?",
+      "SELECT estimate_id, order_number FROM estimate WHERE estimate_number = ? LIMIT 1",
       [estimateNumber]
     );
 
@@ -511,34 +512,28 @@ router.post("/generate-order-number/:estimate_number", async (req, res) => {
     }
 
     const estimateId = checkResult[0].estimate_id;
-    const existingOrderNumber = checkResult[0].order_number;
-
-    if (existingOrderNumber) {
-      return res.status(200).json({ 
-        success: true, 
-        message: "Order number already exists",
-        order_number: existingOrderNumber,
-        order_date: new Date().toISOString().split('T')[0]
-      });
-    }
-
-    const orderNumber = await generateOrderNumber();
+    let orderNumber = checkResult[0].order_number;
     const orderDate = new Date().toISOString().split('T')[0];
 
+    // Generate order number if doesn't exist
+    if (!orderNumber) {
+      orderNumber = await generateOrderNumber();
+    }
+
+    // Update ALL rows for this estimate_number: set order_number and pdf_generated = 1
     const [updateResult] = await db.query(
-      "UPDATE estimate SET order_number = ?, order_date = ?, updated_at = NOW() WHERE estimate_id = ?",
-      [orderNumber, orderDate, estimateId]
+      "UPDATE estimate SET order_number = ?, order_date = ?, pdf_generated = 1, updated_at = NOW() WHERE estimate_number = ?",
+      [orderNumber, orderDate, estimateNumber]
     );
 
-    if (updateResult.affectedRows === 0) {
-      return res.status(500).json({ message: "Failed to update order number" });
-    }
+    console.log(`Updated ${updateResult.affectedRows} rows. PDF generated: YES`);
 
     res.status(200).json({ 
       success: true, 
-      message: "Order number generated successfully",
+      message: "Order number generated and PDF marked as ready",
       order_number: orderNumber,
-      order_date: orderDate
+      order_date: orderDate,
+      pdf_generated: true
     });
 
   } catch (err) {
@@ -871,6 +866,7 @@ router.get("/next-packet-barcode", async (req, res) => {
 });
 
 // Get unique estimates
+// Get unique estimates
 router.get("/get-unique-estimates", async (req, res) => {
   try {
     console.log("Fetching unique estimates...");
@@ -964,6 +960,148 @@ router.get("/get-estimates/:estimate_number", async (req, res) => {
     res.json({ uniqueData, repeatedData });
   } catch (err) {
     res.status(500).json({ message: "Error fetching data", error: err.message });
+  }
+});
+
+
+
+// Save invoice PDF to server
+router.post("/save-invoice/:estimate_number", async (req, res) => {
+  try {
+    const estimateNumber = req.params.estimate_number;
+    const { pdfData } = req.body; // Base64 encoded PDF data
+
+    if (!pdfData) {
+      return res.status(400).json({ message: "PDF data is required" });
+    }
+
+    // Create uploads directory if not exists
+    const uploadDir = path.join(__dirname, '../uploads/invoices');
+    await fs.mkdir(uploadDir, { recursive: true });
+
+    // Save PDF file
+    const pdfBuffer = Buffer.from(pdfData, 'base64');
+    const filePath = path.join(uploadDir, `${estimateNumber}.pdf`);
+    await fs.writeFile(filePath, pdfBuffer);
+
+    // Update database with invoice path
+    const [result] = await db.query(
+      "UPDATE estimate SET invoice_pdf = ? WHERE estimate_number = ?",
+      [`/uploads/invoices/${estimateNumber}.pdf`, estimateNumber]
+    );
+
+    res.json({ 
+      success: true, 
+      message: "Invoice saved successfully",
+      filePath: `/uploads/invoices/${estimateNumber}.pdf`
+    });
+  } catch (err) {
+    console.error("Error saving invoice:", err);
+    res.status(500).json({ message: "Failed to save invoice", error: err.message });
+  }
+});
+
+// Get invoice PDF
+// In your backend routes file (estimateRoutes.js or similar)
+
+// Get invoice data for PDF generation (returns JSON, not file)
+router.get("/get-invoice/:estimate_number", async (req, res) => {
+  try {
+    const estNum = req.params.estimate_number;
+    
+    if (!estNum) {
+      return res.status(400).json({ message: "Estimate number is required" });
+    }
+
+    console.log(`Fetching invoice data for: ${estNum}`);
+    
+    // Check if pdf_generated is true
+    const [checkResult] = await db.query(
+      "SELECT pdf_generated, order_number FROM estimate WHERE estimate_number = ? LIMIT 1",
+      [estNum]
+    );
+
+    if (checkResult.length === 0) {
+      return res.status(404).json({ message: "Invoice not found" });
+    }
+
+    // Get full estimate data
+    const [results] = await db.query(
+      "SELECT * FROM estimate WHERE estimate_number = ? ORDER BY estimate_id", 
+      [estNum]
+    );
+
+    if (!results.length) {
+      return res.status(404).json({ message: "No data found for given estimate number" });
+    }
+
+    // Check if customer is authorized (for customer panel)
+    const customerId = req.query.customer_id;
+    if (customerId) {
+      const estimateCustomerId = results[0].customer_id;
+      if (estimateCustomerId && String(estimateCustomerId) !== String(customerId)) {
+        return res.status(403).json({ message: "Unauthorized access" });
+      }
+    }
+
+    const uniqueData = {
+      date: results[0].date,
+      estimate_number: results[0].estimate_number,
+      order_number: results[0].order_number,
+      order_date: results[0].order_date,
+      total_amount: results[0].total_amount,
+      taxable_amount: results[0].taxable_amount,
+      tax_amount: results[0].tax_amount,
+      net_amount: results[0].net_amount,
+      disscount: results[0].disscount,
+      customer_name: results[0].customer_name,
+      mobile: results[0].customer_id, // You might need a separate mobile field
+      pdf_generated: results[0].pdf_generated,
+      estimate_status: results[0].estimate_status
+    };
+
+    const repeatedData = results.map(row => ({
+      code: row.code,
+      product_id: row.product_id,
+      product_name: row.product_name,
+      metal_type: row.metal_type,
+      design_name: row.design_name,
+      purity: row.purity,
+      category: row.category,
+      sub_category: row.sub_category,
+      gross_weight: row.gross_weight,
+      stone_weight: row.stone_weight,
+      stone_price: row.stone_price,
+      weight_bw: row.weight_bw,
+      va_on: row.va_on,
+      va_percent: row.va_percent,
+      wastage_weight: row.wastage_weight,
+      msp_va_percent: row.msp_va_percent,
+      msp_wastage_weight: row.msp_wastage_weight,
+      total_weight_av: row.total_weight_av,
+      mc_on: row.mc_on,
+      mc_per_gram: row.mc_per_gram,
+      making_charges: row.making_charges,
+      rate: row.rate,
+      rate_amt: row.rate_amt,
+      tax_percent: row.tax_percent,
+      tax_amt: row.tax_amt,
+      total_price: row.total_price,
+      pricing: row.pricing,
+      pieace_cost: row.pieace_cost,
+      disscount_percentage: row.disscount_percentage,
+      disscount: row.disscount,
+      hm_charges: row.hm_charges,
+      original_total_price: row.original_total_price,
+      opentag_id: row.opentag_id,
+      qty: row.qty,
+      mc_per_gram: row.mc_per_gram
+    }));
+
+    res.json({ uniqueData, repeatedData });
+  } catch (err) {
+    console.error("Error fetching invoice data:", err);
+    res.status(500).json({ message: "Error fetching invoice data", error: err.message });
   }
 });
 
