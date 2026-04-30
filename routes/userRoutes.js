@@ -98,7 +98,7 @@ router.get('/api/users', async (req, res) => {
   try {
     const [results] = await db.query(`
       SELECT id, full_name, email_id, phone, date_of_birth, gender, designation, 
-             date_of_anniversary, country, state, city, 
+             date_of_anniversary, country, state, city, district,
              company_name, role, status, pincode, latitude, longitude 
       FROM users
     `);
@@ -115,7 +115,7 @@ router.get('/api/users/:id', async (req, res) => {
   try {
     const [results] = await db.query(`
       SELECT id, full_name, email_id, phone, date_of_birth, gender, designation, 
-             date_of_anniversary, country, state, city, 
+             date_of_anniversary, country, state, city, district,
              company_name, role, status, pincode, face_photo_path, latitude, longitude 
       FROM users WHERE id = ?
     `, [id]);
@@ -142,6 +142,7 @@ router.post('/api/users', uploadFace.single('face_photo'), async (req, res) => {
       country,
       state,
       city,
+      district, // Added district
       password,
       confirm_password,
       company_name,
@@ -172,10 +173,10 @@ router.post('/api/users', uploadFace.single('face_photo'), async (req, res) => {
     const insertQuery = `
       INSERT INTO users (
         full_name, email_id, phone, date_of_birth, gender, designation,
-        date_of_anniversary, country, state, city,
+        date_of_anniversary, country, state, city, district,
         password, confirm_password, company_name, role, status, pincode,
         face_descriptor, face_photo_path, latitude, longitude
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const [result] = await db.query(insertQuery, [
@@ -189,6 +190,7 @@ router.post('/api/users', uploadFace.single('face_photo'), async (req, res) => {
       country || null,
       state || null,
       city || null,
+      district || null, // Added district
       password,
       confirm_password,
       company_name || null,
@@ -229,6 +231,7 @@ router.put('/api/users/:id', uploadFace.single('face_photo'), async (req, res) =
       country,
       state,
       city,
+      district, // Added district
       password,
       confirm_password,
       company_name,
@@ -276,6 +279,7 @@ router.put('/api/users/:id', uploadFace.single('face_photo'), async (req, res) =
     if (country !== undefined) { updates.push('country = ?'); params.push(country); }
     if (state !== undefined) { updates.push('state = ?'); params.push(state); }
     if (city !== undefined) { updates.push('city = ?'); params.push(city); }
+    if (district !== undefined) { updates.push('district = ?'); params.push(district); } // Added district
     if (password !== undefined) { updates.push('password = ?'); params.push(password); }
     if (confirm_password !== undefined) { updates.push('confirm_password = ?'); params.push(confirm_password); }
     if (company_name !== undefined) { updates.push('company_name = ?'); params.push(company_name); }
