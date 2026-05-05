@@ -23,20 +23,43 @@ const faceStorage = multer.diskStorage({
   }
 });
 
+// Configure multer for profile photo uploads
+const profileStorage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadDir = 'uploads/profiles';
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'profile-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const fileFilter = function (req, file, cb) {
+  const filetypes = /jpeg|jpg|png|gif|webp/;
+  const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = filetypes.test(file.mimetype);
+  
+  if (mimetype && extname) {
+    return cb(null, true);
+  } else {
+    cb(new Error('Only image files are allowed!'));
+  }
+};
+
 const uploadFace = multer({
   storage: faceStorage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
-  fileFilter: function (req, file, cb) {
-    const filetypes = /jpeg|jpg|png|gif|webp/;
-    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = filetypes.test(file.mimetype);
-    
-    if (mimetype && extname) {
-      return cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed!'));
-    }
-  }
+  fileFilter: fileFilter
+});
+
+const uploadProfile = multer({
+  storage: profileStorage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: fileFilter
 });
 
 // Configure nodemailer
@@ -99,7 +122,7 @@ router.get('/api/users', async (req, res) => {
     const [results] = await db.query(`
       SELECT id, full_name, email_id, phone, date_of_birth, gender, designation, 
              date_of_anniversary, country, state, city, district,
-             company_name, role, status, pincode, latitude, longitude 
+             company_name, role, status, pincode, face_photo_path, profile_photo_path, latitude, longitude 
       FROM users
     `);
     res.json(results);
@@ -116,7 +139,7 @@ router.get('/api/users/:id', async (req, res) => {
     const [results] = await db.query(`
       SELECT id, full_name, email_id, phone, date_of_birth, gender, designation, 
              date_of_anniversary, country, state, city, district,
-             company_name, role, status, pincode, face_photo_path, latitude, longitude 
+             company_name, role, status, pincode, face_photo_path, profile_photo_path, latitude, longitude 
       FROM users WHERE id = ?
     `, [id]);
 
@@ -128,8 +151,13 @@ router.get('/api/users/:id', async (req, res) => {
   }
 });
 
-/* CREATE new user */
-router.post('/api/users', uploadFace.single('face_photo'), async (req, res) => {
+/* CREATE new user - Updated to handle both face_photo and profile_photo */
+router.post('/api/users', 
+  uploadFace.fields([
+    { name: 'face_photo', maxCount: 1 },
+    { name: 'profile_photo', maxCount: 1 }
+  ]), 
+  async (req, res) => {
   try {
     const {
       full_name,
@@ -142,7 +170,7 @@ router.post('/api/users', uploadFace.single('face_photo'), async (req, res) => {
       country,
       state,
       city,
-      district, // Added district
+      district,
       password,
       confirm_password,
       company_name,
@@ -168,15 +196,31 @@ router.post('/api/users', uploadFace.single('face_photo'), async (req, res) => {
       return res.status(400).json({ message: 'Email already registered' });
     }
 
-    const facePhotoPath = req.file ? req.file.filename : null;
+    // For salesman role, profile_photo is mandatory
+    if (role === 'salesman') {
+      if (!req.files || !req.files.profile_photo || req.files.profile_photo.length === 0) {
+        return res.status(400).json({ 
+          message: 'Profile photo is mandatory for salesman registration' 
+        });
+      }
+    }
+
+    // Get file paths
+    const facePhotoPath = req.files && req.files.face_photo && req.files.face_photo.length > 0 
+      ? req.files.face_photo[0].filename 
+      : null;
+    
+    const profilePhotoPath = req.files && req.files.profile_photo && req.files.profile_photo.length > 0 
+      ? req.files.profile_photo[0].filename 
+      : null;
 
     const insertQuery = `
       INSERT INTO users (
         full_name, email_id, phone, date_of_birth, gender, designation,
         date_of_anniversary, country, state, city, district,
         password, confirm_password, company_name, role, status, pincode,
-        face_descriptor, face_photo_path, latitude, longitude
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        face_descriptor, face_photo_path, profile_photo_path, latitude, longitude
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const [result] = await db.query(insertQuery, [
@@ -190,7 +234,7 @@ router.post('/api/users', uploadFace.single('face_photo'), async (req, res) => {
       country || null,
       state || null,
       city || null,
-      district || null, // Added district
+      district || null,
       password,
       confirm_password,
       company_name || null,
@@ -199,6 +243,7 @@ router.post('/api/users', uploadFace.single('face_photo'), async (req, res) => {
       pincode || null,
       face_descriptor || null,
       facePhotoPath,
+      profilePhotoPath,
       latitude || null,
       longitude || null
     ]);
@@ -207,7 +252,8 @@ router.post('/api/users', uploadFace.single('face_photo'), async (req, res) => {
       id: result.insertId,
       message: 'User created successfully',
       email_id,
-      face_photo: facePhotoPath
+      face_photo: facePhotoPath,
+      profile_photo: profilePhotoPath
     });
 
   } catch (err) {
@@ -217,7 +263,12 @@ router.post('/api/users', uploadFace.single('face_photo'), async (req, res) => {
 });
 
 /* UPDATE user */
-router.put('/api/users/:id', uploadFace.single('face_photo'), async (req, res) => {
+router.put('/api/users/:id', 
+  uploadFace.fields([
+    { name: 'face_photo', maxCount: 1 },
+    { name: 'profile_photo', maxCount: 1 }
+  ]), 
+  async (req, res) => {
   const { id } = req.params;
   try {
     const {
@@ -231,7 +282,7 @@ router.put('/api/users/:id', uploadFace.single('face_photo'), async (req, res) =
       country,
       state,
       city,
-      district, // Added district
+      district,
       password,
       confirm_password,
       company_name,
@@ -252,7 +303,7 @@ router.put('/api/users/:id', uploadFace.single('face_photo'), async (req, res) =
 
     // Get current user data
     const [currentUser] = await db.query(
-      'SELECT status, full_name, email_id, password FROM users WHERE id = ?', 
+      'SELECT status, full_name, email_id, password, face_photo_path, profile_photo_path FROM users WHERE id = ?', 
       [id]
     );
     
@@ -279,7 +330,7 @@ router.put('/api/users/:id', uploadFace.single('face_photo'), async (req, res) =
     if (country !== undefined) { updates.push('country = ?'); params.push(country); }
     if (state !== undefined) { updates.push('state = ?'); params.push(state); }
     if (city !== undefined) { updates.push('city = ?'); params.push(city); }
-    if (district !== undefined) { updates.push('district = ?'); params.push(district); } // Added district
+    if (district !== undefined) { updates.push('district = ?'); params.push(district); }
     if (password !== undefined) { updates.push('password = ?'); params.push(password); }
     if (confirm_password !== undefined) { updates.push('confirm_password = ?'); params.push(confirm_password); }
     if (company_name !== undefined) { updates.push('company_name = ?'); params.push(company_name); }
@@ -290,17 +341,30 @@ router.put('/api/users/:id', uploadFace.single('face_photo'), async (req, res) =
     if (latitude !== undefined) { updates.push('latitude = ?'); params.push(latitude); }
     if (longitude !== undefined) { updates.push('longitude = ?'); params.push(longitude); }
     
-    if (req.file) {
-      // Delete old photo if exists
-      const [oldPhoto] = await db.query('SELECT face_photo_path FROM users WHERE id = ?', [id]);
-      if (oldPhoto[0]?.face_photo_path) {
-        const oldPath = path.join('uploads/faces', oldPhoto[0].face_photo_path);
+    // Handle face photo update
+    if (req.files && req.files.face_photo && req.files.face_photo.length > 0) {
+      // Delete old face photo if exists
+      if (currentUser[0]?.face_photo_path) {
+        const oldPath = path.join('uploads/faces', currentUser[0].face_photo_path);
         if (fs.existsSync(oldPath)) {
           fs.unlinkSync(oldPath);
         }
       }
       updates.push('face_photo_path = ?');
-      params.push(req.file.filename);
+      params.push(req.files.face_photo[0].filename);
+    }
+
+    // Handle profile photo update
+    if (req.files && req.files.profile_photo && req.files.profile_photo.length > 0) {
+      // Delete old profile photo if exists
+      if (currentUser[0]?.profile_photo_path) {
+        const oldPath = path.join('uploads/profiles', currentUser[0].profile_photo_path);
+        if (fs.existsSync(oldPath)) {
+          fs.unlinkSync(oldPath);
+        }
+      }
+      updates.push('profile_photo_path = ?');
+      params.push(req.files.profile_photo[0].filename);
     }
 
     if (updates.length === 0) {
@@ -421,12 +485,22 @@ router.post('/api/users/face-login', async (req, res) => {
 router.delete('/api/users/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    // Get face photo before deletion
-    const [user] = await db.query('SELECT face_photo_path FROM users WHERE id = ?', [id]);
+    // Get photos before deletion
+    const [user] = await db.query('SELECT face_photo_path, profile_photo_path FROM users WHERE id = ?', [id]);
+    
+    // Delete face photo if exists
     if (user[0]?.face_photo_path) {
-      const photoPath = path.join('uploads/faces', user[0].face_photo_path);
-      if (fs.existsSync(photoPath)) {
-        fs.unlinkSync(photoPath);
+      const facePath = path.join('uploads/faces', user[0].face_photo_path);
+      if (fs.existsSync(facePath)) {
+        fs.unlinkSync(facePath);
+      }
+    }
+    
+    // Delete profile photo if exists
+    if (user[0]?.profile_photo_path) {
+      const profilePath = path.join('uploads/profiles', user[0].profile_photo_path);
+      if (fs.existsSync(profilePath)) {
+        fs.unlinkSync(profilePath);
       }
     }
     
@@ -496,6 +570,18 @@ router.post('/api/users/login', async (req, res) => {
 router.get('/api/users/face-photo/:filename', (req, res) => {
   const { filename } = req.params;
   const filePath = path.join(__dirname, '../uploads/faces', filename);
+  
+  if (fs.existsSync(filePath)) {
+    res.sendFile(filePath);
+  } else {
+    res.status(404).json({ message: 'Photo not found' });
+  }
+});
+
+// Serve profile photos
+router.get('/api/users/profile-photo/:filename', (req, res) => {
+  const { filename } = req.params;
+  const filePath = path.join(__dirname, '../uploads/profiles', filename);
   
   if (fs.existsSync(filePath)) {
     res.sendFile(filePath);
