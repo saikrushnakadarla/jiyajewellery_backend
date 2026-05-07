@@ -11,6 +11,61 @@ require('dotenv').config(); // Add this line
 app.use(cors());
 app.use(express.json());
 
+// Store active SSE connections
+global.adminSSEConnections = new Set();
+
+
+// SSE endpoint for admin notifications
+app.get('/api/admin-notifications', (req, res) => {
+  // Set headers for SSE
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
+  });
+  
+  // Send initial connection message
+  res.write(`data: ${JSON.stringify({ type: 'connected', message: 'Connected to notification stream' })}\n\n`);
+  
+  // Store connection
+  global.adminSSEConnections.add(res);
+  
+  // Remove connection when client closes
+  req.on('close', () => {
+    global.adminSSEConnections.delete(res);
+    console.log('SSE connection closed. Active connections:', global.adminSSEConnections.size);
+  });
+  
+  // Keep connection alive with heartbeat every 30 seconds
+  const heartbeat = setInterval(() => {
+    if (res.writableEnded) {
+      clearInterval(heartbeat);
+      return;
+    }
+    res.write(`: heartbeat\n\n`);
+  }, 30000);
+  
+  req.on('close', () => clearInterval(heartbeat));
+});
+
+// Helper function to send notification to all admin clients
+function sendAdminNotification(notification) {
+  const message = `data: ${JSON.stringify(notification)}\n\n`;
+  global.adminSSEConnections.forEach(client => {
+    try {
+      if (!client.writableEnded) {
+        client.write(message);
+      }
+    } catch (err) {
+      console.error('Error sending notification:', err);
+    }
+  });
+}
+
+// Make helper available globally
+global.sendAdminNotification = sendAdminNotification;
+
 
 
 // Serve static files from uploads directory
@@ -42,6 +97,9 @@ const companyRoutes = require('./routes/companyInfoRoutes');
 const visitLogsRoutes = require('./routes/visitRoutes');
 const loanAmountRoutes = require('./routes/loanAmountRoutes');
 const leaveManagementRoutes = require('./routes/leavemanagementRoutes');
+const visitLogsScheduleRoutes = require('./routes/visitLogSchedule');
+
+
 
 
 
@@ -61,6 +119,9 @@ app.use('/visit-logs', visitLogsRoutes);
 app.use('/', loanAmountRoutes);
 // Use routes
 app.use('/', leaveManagementRoutes);
+
+
+app.use('/api/visit-logs-schedule', visitLogsScheduleRoutes);
 
 // Default route
 app.get('/', (req, res) => {
