@@ -5,6 +5,11 @@ const fs = require('fs').promises;
 const path = require('path');
 const multer = require('multer');
 
+
+// At the top of estimateRoutes.js, after other imports
+// global.sendAdminNotification is available from index.js
+
+
 // Configure multer for pack image uploads
 const packImageStorage = multer.diskStorage({
   destination: async (req, file, cb) => {
@@ -237,7 +242,6 @@ router.post("/add/estimate", async (req, res) => {
     }
 
     // Check if estimate with same barcode and estimate_number already exists
-    // This prevents duplicate entries for the same product in the same estimate
     const [existingEntryCheck] = await db.query(
       "SELECT COUNT(*) AS count FROM estimate WHERE estimate_number = ? AND code = ?",
       [data.estimate_number, code]
@@ -327,7 +331,7 @@ router.post("/add/estimate", async (req, res) => {
         packet_barcode: packetBarcode
       });
     } else {
-      // Always INSERT new entry (do not update other entries)
+      // INSERT new entry
       console.log("Inserting new estimate entry...");
       console.log("Packet barcode for insertion:", packetBarcode);
       
@@ -400,6 +404,23 @@ router.post("/add/estimate", async (req, res) => {
       ];
 
       const [result] = await db.query(insertSql, insertValues);
+
+      // AFTER SUCCESSFUL INSERT - SEND NOTIFICATION
+      if (global.sendAdminNotification && sourceBy === 'salesman') {
+        const notification = {
+          type: 'NEW_ESTIMATE',
+          id: Date.now(),
+          estimate_number: data.estimate_number,
+          customer_name: customerName,
+          salesperson_id: salespersonId,
+          total_amount: sanitizeNumber(data.net_amount),
+          timestamp: new Date().toISOString(),
+          message: `🆕 New estimate #${data.estimate_number} created by ${salespersonId} for ${customerName || 'Customer'}`,
+          action_by: 'salesperson'
+        };
+        global.sendAdminNotification(notification);
+        console.log('✅ New estimate notification sent to admin');
+      }
 
       return res.status(200).json({ 
         success: true,
@@ -571,6 +592,7 @@ router.get("/get/estimates-by-source/:source", async (req, res) => {
 });
 
 // Update estimate status by ID
+// Update estimate status by ID - ADD NOTIFICATIONS
 router.put("/update-estimate-status/:id", async (req, res) => {
   try {
     const id = req.params.id;
@@ -583,7 +605,7 @@ router.put("/update-estimate-status/:id", async (req, res) => {
     console.log(`Updating estimate with identifier: ${id} to status: ${estimate_status}`);
 
     const [checkResult] = await db.query(
-      "SELECT estimate_id, estimate_number, source_by, estimate_status, order_number FROM estimate WHERE estimate_id = ? OR estimate_number = ? LIMIT 1",
+      "SELECT estimate_id, estimate_number, source_by, estimate_status, order_number, customer_name, salesperson_id FROM estimate WHERE estimate_id = ? OR estimate_number = ? LIMIT 1",
       [id, id]
     );
 
@@ -595,6 +617,8 @@ router.put("/update-estimate-status/:id", async (req, res) => {
     const estimateNumber = checkResult[0].estimate_number;
     const currentOrderNumber = checkResult[0].order_number;
     const sourceBy = checkResult[0].source_by;
+    const customerName = checkResult[0].customer_name;
+    const salespersonId = checkResult[0].salesperson_id;
 
     if (currentOrderNumber && currentOrderNumber.trim() !== '') {
       return res.status(400).json({ 
@@ -609,6 +633,7 @@ router.put("/update-estimate-status/:id", async (req, res) => {
       });
     }
 
+    const oldStatus = checkResult[0].estimate_status;
     let orderNumber = null;
     let orderDate = null;
 
@@ -633,6 +658,24 @@ router.put("/update-estimate-status/:id", async (req, res) => {
 
     if (result.affectedRows === 0) {
       return res.status(500).json({ message: "Failed to update status" });
+    }
+
+    // SEND NOTIFICATION TO ADMIN
+    if (global.sendAdminNotification && oldStatus !== estimate_status) {
+      const notification = {
+        type: 'STATUS_CHANGE',
+        id: Date.now(),
+        estimate_number: estimateNumber,
+        old_status: oldStatus,
+        new_status: estimate_status,
+        customer_name: customerName,
+        salesperson_id: salespersonId,
+        timestamp: new Date().toISOString(),
+        message: `Estimate #${estimateNumber} status changed from ${oldStatus} to ${estimate_status}`,
+        action_by: 'customer'
+      };
+      global.sendAdminNotification(notification);
+      console.log('Notification sent to admin:', notification.message);
     }
 
     res.json({ 
