@@ -1148,4 +1148,99 @@ router.get("/get-invoice/:estimate_number", async (req, res) => {
   }
 });
 
+
+// Add this endpoint to estimateRoutes.js - Get packet details by QR code
+router.get("/api/get-packet-details/:qrCode", async (req, res) => {
+  try {
+    const qrCode = decodeURIComponent(req.params.qrCode);
+    console.log("Fetching packet details for QR:", qrCode);
+    
+    // Try to parse QR data if it's JSON
+    let searchValue = qrCode;
+    let prefix = null;
+    let packetDate = null;
+    let packetWt = null;
+    
+    try {
+      const parsedData = JSON.parse(qrCode);
+      prefix = parsedData.prefix;
+      packetDate = parsedData.packet_date;
+      packetWt = parsedData.packet_wt;
+      searchValue = prefix;
+    } catch (e) {
+      // Not JSON, try direct search
+      console.log("QR is not JSON, searching directly");
+    }
+    
+    let query = `
+      SELECT p.*, q.prefix, q.packet_date, q.packet_wt, q.qr_code
+      FROM qr_packets q
+    `;
+    let params = [];
+    
+    if (prefix) {
+      query += ` WHERE q.prefix = ?`;
+      params.push(prefix);
+    } else {
+      query += ` WHERE q.qr_code = ? OR q.prefix = ?`;
+      params.push(searchValue, searchValue);
+    }
+    
+    query += ` ORDER BY q.created_at DESC LIMIT 1`;
+    
+    const [results] = await db.query(query, params);
+    
+    if (results.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Packet not found for this QR code" 
+      });
+    }
+    
+    const packet = results[0];
+    
+    res.json({ 
+      success: true, 
+      data: {
+        id: packet.id,
+        prefix: packet.prefix,
+        packet_date: packet.packet_date,
+        packet_wt: packet.packet_wt,
+        qr_code: packet.qr_code,
+        status: packet.status
+      },
+      message: "Packet details fetched successfully" 
+    });
+  } catch (err) {
+    console.error("Error fetching packet details:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch packet details", 
+      error: err.message 
+    });
+  }
+});
+
+// Get all packet records for dropdown/selection
+router.get("/api/all-packets", async (req, res) => {
+  try {
+    const [results] = await db.query(
+      "SELECT id, prefix, packet_date, packet_wt, qr_code, status FROM qr_packets WHERE status = 'Active' ORDER BY created_at DESC"
+    );
+    
+    res.json({ 
+      success: true, 
+      data: results,
+      message: "Packets fetched successfully" 
+    });
+  } catch (err) {
+    console.error("Error fetching packets:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch packets", 
+      error: err.message 
+    });
+  }
+});
+
 module.exports = router;
