@@ -14,6 +14,7 @@ app.use(express.json());
 // Store active SSE connections
 global.adminSSEConnections = new Set();
 
+global.customerSSEConnections = new Map(); // Map<customerId, Set<connections>>
 
 // SSE endpoint for admin notifications
 app.get('/api/admin-notifications', (req, res) => {
@@ -49,6 +50,57 @@ app.get('/api/admin-notifications', (req, res) => {
   req.on('close', () => clearInterval(heartbeat));
 });
 
+
+
+// SSE endpoint for customer notifications
+app.get('/api/customer-notifications/:customerId', (req, res) => {
+  const { customerId } = req.params;
+  
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
+  });
+  
+  // Send initial connection message
+  res.write(`data: ${JSON.stringify({ type: 'connected', message: 'Connected to customer notification stream' })}\n\n`);
+  
+  // Initialize Set for this customer if not exists
+  if (!global.customerSSEConnections.has(customerId)) {
+    global.customerSSEConnections.set(customerId, new Set());
+  }
+  
+  // Store connection
+  global.customerSSEConnections.get(customerId).add(res);
+  
+  console.log(`Customer ${customerId} connected to SSE. Active customer connections:`, 
+    Array.from(global.customerSSEConnections.entries()).map(([id, conns]) => `${id}: ${conns.size}`));
+  
+  // Remove connection when client closes
+  req.on('close', () => {
+    if (global.customerSSEConnections.has(customerId)) {
+      global.customerSSEConnections.get(customerId).delete(res);
+      if (global.customerSSEConnections.get(customerId).size === 0) {
+        global.customerSSEConnections.delete(customerId);
+      }
+    }
+    console.log(`Customer ${customerId} SSE connection closed`);
+  });
+  
+  // Keep connection alive with heartbeat
+  const heartbeat = setInterval(() => {
+    if (res.writableEnded) {
+      clearInterval(heartbeat);
+      return;
+    }
+    res.write(`: heartbeat\n\n`);
+  }, 30000);
+  
+  req.on('close', () => clearInterval(heartbeat));
+});
+
+
 // Helper function to send notification to all admin clients
 function sendAdminNotification(notification) {
   const message = `data: ${JSON.stringify(notification)}\n\n`;
@@ -63,10 +115,32 @@ function sendAdminNotification(notification) {
   });
 }
 
+
+
+// Helper function to send notification to specific customer
+function sendCustomerNotification(customerId, notification) {
+  const message = `data: ${JSON.stringify(notification)}\n\n`;
+  
+  if (global.customerSSEConnections.has(customerId)) {
+    global.customerSSEConnections.get(customerId).forEach(client => {
+      try {
+        if (!client.writableEnded) {
+          client.write(message);
+        }
+      } catch (err) {
+        console.error(`Error sending notification to customer ${customerId}:`, err);
+      }
+    });
+    console.log(`Notification sent to customer ${customerId}: ${notification.title}`);
+  } else {
+    console.log(`Customer ${customerId} not connected to SSE`);
+  }
+}
+
 // Make helper available globally
 global.sendAdminNotification = sendAdminNotification;
 
-
+global.sendCustomerNotification = sendCustomerNotification;
 
 // Serve static files from uploads directory
 // Serve static files from uploads directory with proper caching headers
@@ -98,7 +172,7 @@ const visitLogsRoutes = require('./routes/visitRoutes');
 const loanAmountRoutes = require('./routes/loanAmountRoutes');
 const leaveManagementRoutes = require('./routes/leavemanagementRoutes');
 const visitLogsScheduleRoutes = require('./routes/visitLogSchedule');
-
+const qrPacketsRoutes = require('./routes/qrpacketcodeRoutes');
 
 
 
@@ -122,6 +196,8 @@ app.use('/', leaveManagementRoutes);
 
 
 app.use('/api/visit-logs-schedule', visitLogsScheduleRoutes);
+
+app.use('/', qrPacketsRoutes);
 
 // Default route
 app.get('/', (req, res) => {
