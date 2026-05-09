@@ -5,10 +5,8 @@ const fs = require('fs').promises;
 const path = require('path');
 const multer = require('multer');
 
-
 // At the top of estimateRoutes.js, after other imports
 // global.sendAdminNotification is available from index.js
-
 
 // Configure multer for pack image uploads
 const packImageStorage = multer.diskStorage({
@@ -43,6 +41,21 @@ const uploadPackImage = multer({
 // Helper functions
 const sanitizeNumber = (val, def = 0) => (val === "" || val === null ? def : val);
 const sanitizeNumeric = (val) => (val ? parseFloat(val.toString().replace(/[^\d.]/g, "")) || 0 : 0);
+
+// Helper function to insert notification into database
+const insertNotification = async (userId, userType, title, message, type, relatedId = null) => {
+  try {
+    const sql = `
+      INSERT INTO notifications (user_id, user_type, title, message, type, related_id, is_read, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 0, NOW(), NOW())
+    `;
+    const [result] = await db.query(sql, [userId, userType, title, message, type, relatedId]);
+    return result.insertId;
+  } catch (err) {
+    console.error("Error inserting notification:", err);
+    return null;
+  }
+};
 
 // Helper function to generate order number
 const generateOrderNumber = async () => {
@@ -177,8 +190,7 @@ router.post("/upload/pack-images", uploadPackImage.array('images', 10), async (r
   }
 });
 
-// Add/Update estimate
-// Add/Update estimate
+// Add/Update estimate with navigation logic
 router.post("/add/estimate", async (req, res) => {
   try {
     const data = req.body;
@@ -241,11 +253,21 @@ router.post("/add/estimate", async (req, res) => {
       estimateStatus = data.estimate_status || "Pending";
     }
 
+    // Determine navigation path based on who created the estimate
+    let navigationPath = null;
+    if (sourceBy === 'salesman' && salespersonId) {
+      navigationPath = `/salesperson-transactions/${salespersonId}`;
+    } else if (customerId) {
+      navigationPath = `/customer-transactions/${customerId}`;
+    }
+
     // Check if estimate with same barcode and estimate_number already exists
     const [existingEntryCheck] = await db.query(
       "SELECT COUNT(*) AS count FROM estimate WHERE estimate_number = ? AND code = ?",
       [data.estimate_number, code]
     );
+
+    let resultAction = null;
 
     if (existingEntryCheck[0].count > 0) {
       // Update existing entry with this barcode
@@ -321,6 +343,7 @@ router.post("/add/estimate", async (req, res) => {
       ];
       
       const [updateResult] = await db.query(updateSql, updateValues);
+      resultAction = 'updated';
       
       return res.status(200).json({ 
         success: true,
@@ -328,7 +351,11 @@ router.post("/add/estimate", async (req, res) => {
         estimate_number: data.estimate_number,
         order_number: orderNumber,
         order_date: orderDate,
-        packet_barcode: packetBarcode
+        packet_barcode: packetBarcode,
+        navigation_path: navigationPath,
+        source_by: sourceBy,
+        salesperson_id: salespersonId,
+        customer_id: customerId
       });
     } else {
       // INSERT new entry
@@ -404,22 +431,81 @@ router.post("/add/estimate", async (req, res) => {
       ];
 
       const [result] = await db.query(insertSql, insertValues);
+      resultAction = 'inserted';
 
-      // AFTER SUCCESSFUL INSERT - SEND NOTIFICATION
-      if (global.sendAdminNotification && sourceBy === 'salesman') {
-        const notification = {
-          type: 'NEW_ESTIMATE',
-          id: Date.now(),
-          estimate_number: data.estimate_number,
-          customer_name: customerName,
-          salesperson_id: salespersonId,
-          total_amount: sanitizeNumber(data.net_amount),
-          timestamp: new Date().toISOString(),
-          message: `🆕 New estimate #${data.estimate_number} created by ${salespersonId} for ${customerName || 'Customer'}`,
-          action_by: 'salesperson'
-        };
-        global.sendAdminNotification(notification);
-        console.log('✅ New estimate notification sent to admin');
+      // AFTER SUCCESSFUL INSERT - SEND NOTIFICATION AND SAVE TO DATABASE
+      if (sourceBy === 'salesman' && salespersonId) {
+        // Get admin user ID (assuming admin has user_type 'admin' and some logic to get admin ID)
+        // For now, we'll send to admin user_id = 1 (adjust as needed)
+        const adminUserId = 1;
+        
+        const notificationTitle = `New Estimate Created`;
+        const notificationMessage = `🆕 New estimate #${data.estimate_number} created by salesperson ${salespersonId} for ${customerName || 'Customer'}`;
+        
+        // Save to notifications table
+        await insertNotification(
+          adminUserId,
+          'admin',
+          notificationTitle,
+          notificationMessage,
+          'NEW_ESTIMATE',
+          result.insertId
+        );
+        
+        // Send real-time notification via SSE
+        if (global.sendAdminNotification) {
+          const notification = {
+            type: 'NEW_ESTIMATE',
+            id: Date.now(),
+            estimate_number: data.estimate_number,
+            customer_name: customerName,
+            salesperson_id: salespersonId,
+            total_amount: sanitizeNumber(data.net_amount),
+            timestamp: new Date().toISOString(),
+            message: notificationMessage,
+            action_by: 'salesperson',
+            notification_id: result.insertId
+          };
+          global.sendAdminNotification(notification);
+          console.log('✅ New estimate notification sent to admin');
+        }
+        
+        // Also send notification to the salesperson about successful creation
+        await insertNotification(
+          salespersonId,
+          'salesman',
+          'Estimate Created',
+          `Your estimate #${data.estimate_number} has been created successfully for ${customerName || 'Customer'}`,
+          'ESTIMATE_CREATED',
+          result.insertId
+        );
+      } else if (customerId) {
+        // Send notification to customer
+        const notificationTitle = `Estimate Created`;
+        const notificationMessage = `📋 Your estimate #${data.estimate_number} has been created successfully with total amount ₹${sanitizeNumber(data.net_amount).toFixed(2)}`;
+        
+        await insertNotification(
+          customerId,
+          'customer',
+          notificationTitle,
+          notificationMessage,
+          'ESTIMATE_CREATED',
+          result.insertId
+        );
+        
+        // Send real-time notification to customer if available
+        if (global.sendCustomerNotification) {
+          const notification = {
+            type: 'ESTIMATE_CREATED',
+            id: Date.now(),
+            estimate_number: data.estimate_number,
+            total_amount: sanitizeNumber(data.net_amount),
+            timestamp: new Date().toISOString(),
+            message: notificationMessage
+          };
+          global.sendCustomerNotification(customerId, notification);
+          console.log(`✅ Estimate notification sent to customer ${customerId}`);
+        }
       }
 
       return res.status(200).json({ 
@@ -429,7 +515,11 @@ router.post("/add/estimate", async (req, res) => {
         estimate_number: data.estimate_number,
         order_number: orderNumber,
         order_date: orderDate,
-        packet_barcode: packetBarcode
+        packet_barcode: packetBarcode,
+        navigation_path: navigationPath,
+        source_by: sourceBy,
+        salesperson_id: salespersonId,
+        customer_id: customerId
       });
     }
   } catch (err) {
@@ -439,6 +529,82 @@ router.post("/add/estimate", async (req, res) => {
   }
 });
 
+// MARK NOTIFICATION AS READ endpoint
+router.put("/notifications/:id/read", async (req, res) => {
+  try {
+    const notificationId = req.params.id;
+    
+    const [result] = await db.query(
+      "UPDATE notifications SET is_read = 1, updated_at = NOW() WHERE id = ?",
+      [notificationId]
+    );
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: "Notification not found" });
+    }
+    
+    res.json({ success: true, message: "Notification marked as read" });
+  } catch (err) {
+    console.error("Error marking notification as read:", err);
+    res.status(500).json({ message: "Failed to mark notification as read", error: err.message });
+  }
+});
+
+// MARK ALL NOTIFICATIONS AS READ for a user
+router.put("/notifications/mark-all-read/:userType/:userId", async (req, res) => {
+  try {
+    const { userType, userId } = req.params;
+    
+    const [result] = await db.query(
+      "UPDATE notifications SET is_read = 1, updated_at = NOW() WHERE user_type = ? AND user_id = ? AND is_read = 0",
+      [userType, userId]
+    );
+    
+    res.json({ 
+      success: true, 
+      message: `${result.affectedRows} notifications marked as read`,
+      count: result.affectedRows
+    });
+  } catch (err) {
+    console.error("Error marking all notifications as read:", err);
+    res.status(500).json({ message: "Failed to mark notifications as read", error: err.message });
+  }
+});
+
+// GET NOTIFICATIONS for a user
+router.get("/notifications/:userType/:userId", async (req, res) => {
+  try {
+    const { userType, userId } = req.params;
+    const limit = parseInt(req.query.limit) || 50;
+    
+    const [results] = await db.query(
+      `SELECT id, user_id, user_type, title, message, type, related_id, is_read, 
+              DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') as created_at,
+              DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s') as updated_at
+       FROM notifications 
+       WHERE user_type = ? AND user_id = ? 
+       ORDER BY created_at DESC 
+       LIMIT ?`,
+      [userType, userId, limit]
+    );
+    
+    // Get unread count
+    const [countResult] = await db.query(
+      "SELECT COUNT(*) as unread_count FROM notifications WHERE user_type = ? AND user_id = ? AND is_read = 0",
+      [userType, userId]
+    );
+    
+    res.json({ 
+      success: true, 
+      notifications: results,
+      unread_count: countResult[0].unread_count,
+      total: results.length
+    });
+  } catch (err) {
+    console.error("Error fetching notifications:", err);
+    res.status(500).json({ message: "Failed to fetch notifications", error: err.message });
+  }
+});
 
 // Update estimate with packet details (for Print button)
 router.post("/update/estimate-with-packet", async (req, res) => {
@@ -512,7 +678,6 @@ router.post("/update/estimate-with-packet", async (req, res) => {
 });
 
 // Generate order number when printing
-// Generate order number and mark PDF as generated
 router.post("/generate-order-number/:estimate_number", async (req, res) => {
   try {
     const estimateNumber = req.params.estimate_number;
@@ -524,7 +689,7 @@ router.post("/generate-order-number/:estimate_number", async (req, res) => {
     console.log(`Generating order number and PDF for estimate: ${estimateNumber}`);
 
     const [checkResult] = await db.query(
-      "SELECT estimate_id, order_number FROM estimate WHERE estimate_number = ? LIMIT 1",
+      "SELECT estimate_id, order_number, customer_id, salesperson_id FROM estimate WHERE estimate_number = ? LIMIT 1",
       [estimateNumber]
     );
 
@@ -535,6 +700,8 @@ router.post("/generate-order-number/:estimate_number", async (req, res) => {
     const estimateId = checkResult[0].estimate_id;
     let orderNumber = checkResult[0].order_number;
     const orderDate = new Date().toISOString().split('T')[0];
+    const customerId = checkResult[0].customer_id;
+    const salespersonId = checkResult[0].salesperson_id;
 
     // Generate order number if doesn't exist
     if (!orderNumber) {
@@ -548,6 +715,34 @@ router.post("/generate-order-number/:estimate_number", async (req, res) => {
     );
 
     console.log(`Updated ${updateResult.affectedRows} rows. PDF generated: YES`);
+
+    // Send notification about order generation
+    if (customerId) {
+      const notificationTitle = `Order Generated`;
+      const notificationMessage = `✅ Your order #${orderNumber} has been generated for estimate #${estimateNumber}`;
+      
+      await insertNotification(
+        customerId,
+        'customer',
+        notificationTitle,
+        notificationMessage,
+        'ORDER_GENERATED',
+        estimateId
+      );
+      
+      // Send real-time notification
+      if (global.sendCustomerNotification) {
+        const notification = {
+          type: 'ORDER_GENERATED',
+          id: Date.now(),
+          estimate_number: estimateNumber,
+          order_number: orderNumber,
+          timestamp: new Date().toISOString(),
+          message: notificationMessage
+        };
+        global.sendCustomerNotification(customerId, notification);
+      }
+    }
 
     res.status(200).json({ 
       success: true, 
@@ -591,7 +786,6 @@ router.get("/get/estimates-by-source/:source", async (req, res) => {
   }
 });
 
-// Update estimate status by ID
 // Update estimate status by ID - ADD NOTIFICATIONS
 router.put("/update-estimate-status/:id", async (req, res) => {
   try {
@@ -605,7 +799,7 @@ router.put("/update-estimate-status/:id", async (req, res) => {
     console.log(`Updating estimate with identifier: ${id} to status: ${estimate_status}`);
 
     const [checkResult] = await db.query(
-      "SELECT estimate_id, estimate_number, source_by, estimate_status, order_number, customer_name, salesperson_id FROM estimate WHERE estimate_id = ? OR estimate_number = ? LIMIT 1",
+      "SELECT estimate_id, estimate_number, source_by, estimate_status, order_number, customer_name, salesperson_id, customer_id FROM estimate WHERE estimate_id = ? OR estimate_number = ? LIMIT 1",
       [id, id]
     );
 
@@ -619,6 +813,7 @@ router.put("/update-estimate-status/:id", async (req, res) => {
     const sourceBy = checkResult[0].source_by;
     const customerName = checkResult[0].customer_name;
     const salespersonId = checkResult[0].salesperson_id;
+    const customerId = checkResult[0].customer_id;
 
     if (currentOrderNumber && currentOrderNumber.trim() !== '') {
       return res.status(400).json({ 
@@ -660,22 +855,67 @@ router.put("/update-estimate-status/:id", async (req, res) => {
       return res.status(500).json({ message: "Failed to update status" });
     }
 
-    // SEND NOTIFICATION TO ADMIN
-    if (global.sendAdminNotification && oldStatus !== estimate_status) {
-      const notification = {
-        type: 'STATUS_CHANGE',
-        id: Date.now(),
-        estimate_number: estimateNumber,
-        old_status: oldStatus,
-        new_status: estimate_status,
-        customer_name: customerName,
-        salesperson_id: salespersonId,
-        timestamp: new Date().toISOString(),
-        message: `Estimate #${estimateNumber} status changed from ${oldStatus} to ${estimate_status}`,
-        action_by: 'customer'
-      };
-      global.sendAdminNotification(notification);
-      console.log('Notification sent to admin:', notification.message);
+    // SEND NOTIFICATION TO ADMIN AND CUSTOMER
+    if (oldStatus !== estimate_status) {
+      const adminUserId = 1; // Adjust as needed
+      
+      // Notification for admin
+      const adminNotificationTitle = `Estimate Status Changed`;
+      const adminNotificationMessage = `📝 Estimate #${estimateNumber} status changed from ${oldStatus} to ${estimate_status}`;
+      
+      await insertNotification(
+        adminUserId,
+        'admin',
+        adminNotificationTitle,
+        adminNotificationMessage,
+        'STATUS_CHANGE',
+        estimateId
+      );
+      
+      if (global.sendAdminNotification) {
+        const notification = {
+          type: 'STATUS_CHANGE',
+          id: Date.now(),
+          estimate_number: estimateNumber,
+          old_status: oldStatus,
+          new_status: estimate_status,
+          customer_name: customerName,
+          salesperson_id: salespersonId,
+          timestamp: new Date().toISOString(),
+          message: adminNotificationMessage,
+          action_by: 'customer'
+        };
+        global.sendAdminNotification(notification);
+        console.log('Notification sent to admin:', notification.message);
+      }
+      
+      // Notification for customer
+      if (customerId) {
+        const customerNotificationTitle = `Estimate ${estimate_status.toUpperCase()}`;
+        const customerNotificationMessage = `Your estimate #${estimateNumber} has been ${estimate_status.toLowerCase()}`;
+        
+        await insertNotification(
+          customerId,
+          'customer',
+          customerNotificationTitle,
+          customerNotificationMessage,
+          'STATUS_CHANGE',
+          estimateId
+        );
+        
+        if (global.sendCustomerNotification) {
+          const customerNotif = {
+            type: 'STATUS_CHANGE',
+            id: Date.now(),
+            estimate_number: estimateNumber,
+            old_status: oldStatus,
+            new_status: estimate_status,
+            timestamp: new Date().toISOString(),
+            message: customerNotificationMessage
+          };
+          global.sendCustomerNotification(customerId, customerNotif);
+        }
+      }
     }
 
     res.json({ 
@@ -909,7 +1149,6 @@ router.get("/next-packet-barcode", async (req, res) => {
 });
 
 // Get unique estimates
-// Get unique estimates
 router.get("/get-unique-estimates", async (req, res) => {
   try {
     console.log("Fetching unique estimates...");
@@ -1006,8 +1245,6 @@ router.get("/get-estimates/:estimate_number", async (req, res) => {
   }
 });
 
-
-
 // Save invoice PDF to server
 router.post("/save-invoice/:estimate_number", async (req, res) => {
   try {
@@ -1044,10 +1281,7 @@ router.post("/save-invoice/:estimate_number", async (req, res) => {
   }
 });
 
-// Get invoice PDF
-// In your backend routes file (estimateRoutes.js or similar)
-
-// Get invoice data for PDF generation (returns JSON, not file)
+// Get invoice data for PDF generation
 router.get("/get-invoice/:estimate_number", async (req, res) => {
   try {
     const estNum = req.params.estimate_number;
@@ -1098,7 +1332,7 @@ router.get("/get-invoice/:estimate_number", async (req, res) => {
       net_amount: results[0].net_amount,
       disscount: results[0].disscount,
       customer_name: results[0].customer_name,
-      mobile: results[0].customer_id, // You might need a separate mobile field
+      mobile: results[0].customer_id,
       pdf_generated: results[0].pdf_generated,
       estimate_status: results[0].estimate_status
     };
@@ -1145,79 +1379,6 @@ router.get("/get-invoice/:estimate_number", async (req, res) => {
   } catch (err) {
     console.error("Error fetching invoice data:", err);
     res.status(500).json({ message: "Error fetching invoice data", error: err.message });
-  }
-});
-
-
-// Add this endpoint to estimateRoutes.js - Get packet details by QR code
-router.get("/api/get-packet-details/:qrCode", async (req, res) => {
-  try {
-    const qrCode = decodeURIComponent(req.params.qrCode);
-    console.log("Fetching packet details for QR:", qrCode);
-    
-    // Try to parse QR data if it's JSON
-    let searchValue = qrCode;
-    let prefix = null;
-    let packetDate = null;
-    let packetWt = null;
-    
-    try {
-      const parsedData = JSON.parse(qrCode);
-      prefix = parsedData.prefix;
-      packetDate = parsedData.packet_date;
-      packetWt = parsedData.packet_wt;
-      searchValue = prefix;
-    } catch (e) {
-      // Not JSON, try direct search
-      console.log("QR is not JSON, searching directly");
-    }
-    
-    let query = `
-      SELECT p.*, q.prefix, q.packet_date, q.packet_wt, q.qr_code
-      FROM qr_packets q
-    `;
-    let params = [];
-    
-    if (prefix) {
-      query += ` WHERE q.prefix = ?`;
-      params.push(prefix);
-    } else {
-      query += ` WHERE q.qr_code = ? OR q.prefix = ?`;
-      params.push(searchValue, searchValue);
-    }
-    
-    query += ` ORDER BY q.created_at DESC LIMIT 1`;
-    
-    const [results] = await db.query(query, params);
-    
-    if (results.length === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Packet not found for this QR code" 
-      });
-    }
-    
-    const packet = results[0];
-    
-    res.json({ 
-      success: true, 
-      data: {
-        id: packet.id,
-        prefix: packet.prefix,
-        packet_date: packet.packet_date,
-        packet_wt: packet.packet_wt,
-        qr_code: packet.qr_code,
-        status: packet.status
-      },
-      message: "Packet details fetched successfully" 
-    });
-  } catch (err) {
-    console.error("Error fetching packet details:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: "Failed to fetch packet details", 
-      error: err.message 
-    });
   }
 });
 
