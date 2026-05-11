@@ -191,6 +191,7 @@ router.post("/upload/pack-images", uploadPackImage.array('images', 10), async (r
 });
 
 // Add/Update estimate with navigation logic
+// Add/Update estimate with navigation logic
 router.post("/add/estimate", async (req, res) => {
   try {
     const data = req.body;
@@ -221,12 +222,25 @@ router.post("/add/estimate", async (req, res) => {
       console.log('Generated order number for customer:', orderNumber);
     }
 
-    // Generate packet barcode if not provided or empty
+    // IMPORTANT FIX: Only generate packet barcode if it's not provided AND not null/empty
+    // If packet_barcode is provided (even empty string), don't auto-generate
     let packetBarcode = data.packet_barcode;
-    if (!packetBarcode || packetBarcode.trim() === '') {
+    
+    // Only generate new packet barcode if:
+    // 1. packet_barcode is NOT provided in request, OR
+    // 2. packet_barcode is explicitly null or undefined (not empty string or "null" string)
+    if (packetBarcode === undefined || packetBarcode === null) {
       packetBarcode = await generatePacketBarcode();
-      console.log('Generated new packet barcode:', packetBarcode);
+      console.log('Generated new packet barcode (no barcode provided):', packetBarcode);
+    } else if (packetBarcode === "") {
+      // Empty string means user explicitly wants NO packet barcode
+      packetBarcode = null;
+      console.log('No packet barcode - user left empty');
+    } else if (packetBarcode === "null" || packetBarcode === "NULL") {
+      packetBarcode = null;
+      console.log('No packet barcode - null string value');
     } else {
+      // Use the provided packet barcode as-is
       console.log('Using provided packet barcode:', packetBarcode);
     }
 
@@ -335,7 +349,7 @@ router.post("/add/estimate", async (req, res) => {
         sanitizeNumber(data.net_amount),
         sanitizeNumber(data.original_total_price),
         sanitizeNumber(data.qty),
-        packetBarcode,
+        packetBarcode,  // Use the processed packet barcode (could be null)
         data.packet_wt ? parseFloat(data.packet_wt) : null,
         packImagesJson,
         data.estimate_number,
@@ -425,7 +439,7 @@ router.post("/add/estimate", async (req, res) => {
         estimateStatus,
         sanitizeNumber(data.original_total_price),
         sanitizeNumber(data.qty),
-        packetBarcode,
+        packetBarcode,  // Use the processed packet barcode (could be null)
         data.packet_wt ? parseFloat(data.packet_wt) : null,
         packImagesJson
       ];
@@ -435,14 +449,11 @@ router.post("/add/estimate", async (req, res) => {
 
       // AFTER SUCCESSFUL INSERT - SEND NOTIFICATION AND SAVE TO DATABASE
       if (sourceBy === 'salesman' && salespersonId) {
-        // Get admin user ID (assuming admin has user_type 'admin' and some logic to get admin ID)
-        // For now, we'll send to admin user_id = 1 (adjust as needed)
         const adminUserId = 1;
         
         const notificationTitle = `New Estimate Created`;
         const notificationMessage = `🆕 New estimate #${data.estimate_number} created by salesperson ${salespersonId} for ${customerName || 'Customer'}`;
         
-        // Save to notifications table
         await insertNotification(
           adminUserId,
           'admin',
@@ -452,7 +463,6 @@ router.post("/add/estimate", async (req, res) => {
           result.insertId
         );
         
-        // Send real-time notification via SSE
         if (global.sendAdminNotification) {
           const notification = {
             type: 'NEW_ESTIMATE',
@@ -470,7 +480,6 @@ router.post("/add/estimate", async (req, res) => {
           console.log('✅ New estimate notification sent to admin');
         }
         
-        // Also send notification to the salesperson about successful creation
         await insertNotification(
           salespersonId,
           'salesman',
@@ -480,7 +489,6 @@ router.post("/add/estimate", async (req, res) => {
           result.insertId
         );
       } else if (customerId) {
-        // Send notification to customer
         const notificationTitle = `Estimate Created`;
         const notificationMessage = `📋 Your estimate #${data.estimate_number} has been created successfully with total amount ₹${sanitizeNumber(data.net_amount).toFixed(2)}`;
         
@@ -493,7 +501,6 @@ router.post("/add/estimate", async (req, res) => {
           result.insertId
         );
         
-        // Send real-time notification to customer if available
         if (global.sendCustomerNotification) {
           const notification = {
             type: 'ESTIMATE_CREATED',
