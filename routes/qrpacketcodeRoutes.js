@@ -24,6 +24,20 @@ async function getNextQRNumber(prefix) {
   }
 }
 
+// Helper function to validate if QR number already exists for a prefix
+async function isQRNumberExists(prefix, qrNumber) {
+  try {
+    const [results] = await db.query(
+      "SELECT id FROM qr_packets WHERE prefix = ? AND qr_number = ?",
+      [prefix, qrNumber]
+    );
+    return results.length > 0;
+  } catch (error) {
+    console.error("Error checking QR number existence:", error);
+    return false;
+  }
+}
+
 // ==================== EXISTING ROUTES ====================
 
 // Get all QR packet records
@@ -48,10 +62,10 @@ router.get("/api/qr-packets", async (req, res) => {
   }
 });
 
-// Add new QR packet record
+// Add new QR packet record(s) with quantity support
 router.post("/api/qr-packets", async (req, res) => {
   try {
-    const { prefix, qr_number, qr_code, packet_date, packet_wt, status } = req.body;
+    const { prefix, qr_number, qr_code, packet_date, packet_wt, status, quantity } = req.body;
     
     if (!prefix || !packet_date) {
       return res.status(400).json({ 
@@ -60,35 +74,101 @@ router.post("/api/qr-packets", async (req, res) => {
       });
     }
 
-    let finalQRNumber = qr_number;
-    if (!finalQRNumber) {
-      finalQRNumber = await getNextQRNumber(prefix);
+    // Get quantity (default to 1 if not provided)
+    const qty = parseInt(quantity) || 1;
+    
+    if (qty < 1 || qty > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Quantity must be between 1 and 100"
+      });
     }
 
-    const [result] = await db.query(
-      `INSERT INTO qr_packets (prefix, qr_number, qr_code, packet_date, packet_wt, status) 
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [
-        prefix, 
-        finalQRNumber,
-        qr_code || null, 
-        packet_date, 
-        packet_wt ? parseFloat(packet_wt) : null, 
-        status || 'Active'
-      ]
-    );
+    // Get the starting QR number
+    let startNumber = qr_number;
+    if (!startNumber) {
+      startNumber = await getNextQRNumber(prefix);
+    }
+
+    const insertedRecords = [];
+    const skippedRecords = [];
+    let currentNumber = parseInt(startNumber);
+
+    // Generate multiple QR codes
+    for (let i = 0; i < qty; i++) {
+      const formattedNumber = currentNumber.toString().padStart(4, '0');
+      
+      // Check if this QR number already exists for this prefix
+      const exists = await isQRNumberExists(prefix, formattedNumber);
+      
+      if (exists) {
+        skippedRecords.push(`${prefix}${formattedNumber}`);
+        currentNumber++;
+        // Get next available number
+        continue;
+      }
+
+      // Generate QR code data
+      const qrData = JSON.stringify({
+        qr_code: `${prefix}${formattedNumber}`,
+        prefix: prefix,
+        qr_number: formattedNumber,
+        packet_date: packet_date,
+        packet_wt: packet_wt ? parseFloat(packet_wt) : null,
+        timestamp: Date.now()
+      });
+
+      // Insert record
+      const [result] = await db.query(
+        `INSERT INTO qr_packets (prefix, qr_number, qr_code, packet_date, packet_wt, status) 
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          prefix, 
+          formattedNumber,
+          qrData, 
+          packet_date, 
+          packet_wt ? parseFloat(packet_wt) : null, 
+          status || 'Active'
+        ]
+      );
+
+      insertedRecords.push({
+        id: result.insertId,
+        prefix: prefix,
+        qr_number: formattedNumber,
+        full_code: `${prefix}${formattedNumber}`
+      });
+
+      currentNumber++;
+    }
+
+    // Build response message
+    let message = '';
+    if (insertedRecords.length > 0 && skippedRecords.length === 0) {
+      message = `Successfully generated ${insertedRecords.length} QR code(s) starting from ${prefix}${startNumber}`;
+    } else if (insertedRecords.length > 0 && skippedRecords.length > 0) {
+      message = `Generated ${insertedRecords.length} QR code(s). Skipped ${skippedRecords.length} existing: ${skippedRecords.join(', ')}`;
+    } else if (insertedRecords.length === 0) {
+      message = 'No QR codes were generated. All numbers already exist.';
+    }
 
     res.status(201).json({ 
       success: true, 
-      message: "Packet record added successfully",
-      id: result.insertId,
-      qr_number: finalQRNumber
+      message: message,
+      data: {
+        inserted: insertedRecords,
+        skipped: skippedRecords,
+        total_inserted: insertedRecords.length,
+        total_skipped: skippedRecords.length,
+        starting_number: `${prefix}${startNumber}`,
+        quantity: qty
+      }
     });
   } catch (err) {
-    console.error("Error adding QR packet:", err);
+    console.error("Error adding QR packet(s):", err);
     res.status(500).json({ 
       success: false, 
-      message: "Failed to add packet record", 
+      message: "Failed to add packet record(s)", 
       error: err.message 
     });
   }
@@ -125,6 +205,16 @@ router.put("/api/qr-packets/:id", async (req, res) => {
       }
     }
 
+    // Regenerate QR code data
+    const qrData = JSON.stringify({
+      qr_code: `${prefix}${finalQRNumber}`,
+      prefix: prefix,
+      qr_number: finalQRNumber,
+      packet_date: packet_date,
+      packet_wt: packet_wt ? parseFloat(packet_wt) : null,
+      timestamp: Date.now()
+    });
+
     const [result] = await db.query(
       `UPDATE qr_packets 
        SET prefix = ?, qr_number = ?, qr_code = ?, packet_date = ?, packet_wt = ?, status = ?, updated_at = NOW()
@@ -132,7 +222,7 @@ router.put("/api/qr-packets/:id", async (req, res) => {
       [
         prefix, 
         finalQRNumber,
-        qr_code || null, 
+        qrData, 
         packet_date, 
         packet_wt ? parseFloat(packet_wt) : null, 
         status || 'Active',
