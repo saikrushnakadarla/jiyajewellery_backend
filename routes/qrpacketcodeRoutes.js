@@ -355,58 +355,58 @@ router.get("/api/qr-packets/next-number/:prefix", async (req, res) => {
 });
 
 // ==================== NEW: Get packet details by QR data (for scanning) ====================
+// In your qr-packets route, search endpoint:
 router.get("/api/qr-packets/search/:qrData", async (req, res) => {
   try {
     const { qrData } = req.params;
-    
-    console.log("Fetching packet details for QR:", qrData);
-    
-    // Try to parse as JSON first
     let searchTerm = qrData;
-    
+
     try {
       const parsedData = JSON.parse(qrData);
       searchTerm = parsedData.qr_code || parsedData.prefix || qrData;
-      console.log("Parsed JSON, using search term:", searchTerm);
-    } catch (e) {
-      // Not JSON, use as is
-      console.log("QR is not JSON, searching directly:", searchTerm);
-    }
-    
-    // Search by qr_code, prefix, or full qr code (prefix + qr_number concatenation)
+    } catch (e) { /* not JSON, use as-is */ }
+
     const [results] = await db.query(
       `SELECT * FROM qr_packets 
-       WHERE qr_code = ? 
-          OR prefix = ? 
-          OR CONCAT(prefix, qr_number) = ?
-       ORDER BY created_at DESC 
-       LIMIT 1`,
-      [searchTerm, searchTerm, searchTerm]
+       WHERE CONCAT(prefix, qr_number) = ?
+          OR prefix = ?
+       ORDER BY created_at DESC LIMIT 1`,
+      [searchTerm, searchTerm]
     );
-    
+
     if (results.length === 0) {
-      return res.json({
-        success: false,
-        data: null,
-        message: "No packet found with this QR code"
-      });
+      return res.json({ success: false, data: null, message: "No packet found" });
     }
-    
-    console.log("Packet found:", results[0].prefix);
-    
+
+    const row = results[0];
+
+    // FIX: qr_code column stores JSON — parse it to get the actual code string
+    let actualQrCode = `${row.prefix}${row.qr_number}`; // reliable fallback
+    try {
+      const parsed = JSON.parse(row.qr_code);
+      if (parsed.qr_code && typeof parsed.qr_code === 'string') {
+        actualQrCode = parsed.qr_code;
+      }
+    } catch (e) {
+      // qr_code column is already a plain string
+      if (row.qr_code && typeof row.qr_code === 'string' && !row.qr_code.startsWith('{')) {
+        actualQrCode = row.qr_code;
+      }
+    }
+
+    // Return a clean packet object with qr_code as a plain string
     return res.json({
       success: true,
-      data: results[0],
+      data: {
+        ...row,
+        qr_code: actualQrCode  // Always a plain string like "PKT0003"
+      },
       message: "Packet details fetched successfully"
     });
-    
+
   } catch (error) {
     console.error("Error fetching packet details:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch packet details",
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: "Failed to fetch packet details", error: error.message });
   }
 });
 
