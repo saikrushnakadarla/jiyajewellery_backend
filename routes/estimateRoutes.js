@@ -191,12 +191,14 @@ router.post("/upload/pack-images", uploadPackImage.array('images', 10), async (r
 });
 
 // Add/Update estimate with navigation logic
-// Add/Update estimate with navigation logic
+
+// Add/Update estimate with navigation logic - FIXED VERSION
 router.post("/add/estimate", async (req, res) => {
   try {
     const data = req.body;
     console.log("=== RECEIVING ESTIMATE DATA ===");
     console.log("Received packet_barcode:", data.packet_barcode);
+    console.log("Type of packet_barcode:", typeof data.packet_barcode);
     console.log("Force insert flag:", data.force_insert);
     
     if (!data.date || !data.estimate_number) {
@@ -222,23 +224,21 @@ router.post("/add/estimate", async (req, res) => {
       console.log('Generated order number for customer:', orderNumber);
     }
 
-    // IMPORTANT FIX: Only generate packet barcode if it's not provided AND not null/empty
-    // If packet_barcode is provided (even empty string), don't auto-generate
+    // CRITICAL FIX: Handle packet barcode correctly
+    // NEVER auto-generate packet barcode for new product entries
+    // Only use the value sent from frontend (which could be null or a specific barcode)
     let packetBarcode = data.packet_barcode;
     
-    // Only generate new packet barcode if:
-    // 1. packet_barcode is NOT provided in request, OR
-    // 2. packet_barcode is explicitly null or undefined (not empty string or "null" string)
+    // Check if the value is a valid string (not null, undefined, or empty)
     if (packetBarcode === undefined || packetBarcode === null) {
-      packetBarcode = await generatePacketBarcode();
-      console.log('Generated new packet barcode (no barcode provided):', packetBarcode);
-    } else if (packetBarcode === "") {
-      // Empty string means user explicitly wants NO packet barcode
       packetBarcode = null;
-      console.log('No packet barcode - user left empty');
-    } else if (packetBarcode === "null" || packetBarcode === "NULL") {
+      console.log('No packet barcode provided - setting to NULL');
+    } else if (packetBarcode === "" || packetBarcode === "null" || packetBarcode === "NULL") {
       packetBarcode = null;
-      console.log('No packet barcode - null string value');
+      console.log('Empty packet barcode - setting to NULL');
+    } else if (typeof packetBarcode === 'string' && packetBarcode.trim() === '') {
+      packetBarcode = null;
+      console.log('Empty string packet barcode - setting to NULL');
     } else {
       // Use the provided packet barcode as-is
       console.log('Using provided packet barcode:', packetBarcode);
@@ -275,105 +275,10 @@ router.post("/add/estimate", async (req, res) => {
       navigationPath = `/customer-transactions/${customerId}`;
     }
 
-    // Check if estimate with same barcode and estimate_number already exists
-    const [existingEntryCheck] = await db.query(
-      "SELECT COUNT(*) AS count FROM estimate WHERE estimate_number = ? AND code = ?",
-      [data.estimate_number, code]
-    );
-
-    let resultAction = null;
-
-    if (existingEntryCheck[0].count > 0) {
-      // Update existing entry with this barcode
-      console.log("Updating existing entry with same barcode...");
-      
-      let updateSql = `
-        UPDATE estimate SET
-          date=?, pcode=?, salesperson_id=?, source_by=?, customer_id=?, customer_name=?, 
-          estimate_status=?, order_number=?, order_date=?, 
-          opentag_id=?, code=?, product_id=?, product_name=?, metal_type=?, design_name=?, purity=?,
-          category=?, sub_category=?, gross_weight=?, stone_weight=?, stone_price=?, 
-          weight_bw=?, va_on=?, va_percent=?, wastage_weight=?, msp_va_percent=?, 
-          msp_wastage_weight=?, total_weight_av=?, mc_on=?, mc_per_gram=?, making_charges=?, 
-          rate=?, rate_amt=?, tax_percent=?, tax_amt=?, total_price=?, pricing=?, pieace_cost=?, 
-          disscount_percentage=?, disscount=?, hm_charges=?, total_amount=?, taxable_amount=?, 
-          tax_amount=?, net_amount=?, original_total_price=?, qty=?, packet_barcode=?, packet_wt=?, 
-          pack_images=?, updated_at = NOW()
-        WHERE estimate_number = ? AND code = ?`;
-      
-      const updateValues = [
-        data.date,
-        data.pcode || null,
-        salespersonId,
-        sourceBy,
-        customerId,
-        customerName,
-        estimateStatus,
-        orderNumber,
-        orderDate,
-        sanitizeNumber(data.opentag_id),
-        code,
-        data.product_id,
-        data.product_name,
-        data.metal_type,
-        data.design_name,
-        data.purity,
-        category,
-        subCategory,
-        sanitizeNumber(data.gross_weight),
-        sanitizeNumber(data.stone_weight),
-        sanitizeNumber(data.stone_price),
-        sanitizeNumber(data.weight_bw),
-        data.va_on,
-        sanitizeNumber(data.va_percent),
-        sanitizeNumber(data.wastage_weight),
-        sanitizeNumber(data.msp_va_percent),
-        sanitizeNumber(data.msp_wastage_weight),
-        sanitizeNumber(data.total_weight_av),
-        data.mc_on,
-        sanitizeNumber(data.mc_per_gram),
-        sanitizeNumber(data.making_charges),
-        sanitizeNumber(data.rate),
-        sanitizeNumber(data.rate_amt),
-        sanitizeNumeric(data.tax_percent),
-        sanitizeNumber(data.tax_amt),
-        sanitizeNumber(data.total_price),
-        data.pricing,
-        sanitizeNumber(data.pieace_cost),
-        sanitizeNumber(data.disscount_percentage),
-        sanitizeNumber(data.disscount),
-        sanitizeNumber(data.hm_charges),
-        sanitizeNumber(data.total_amount),
-        sanitizeNumber(data.taxable_amount),
-        sanitizeNumber(data.tax_amount),
-        sanitizeNumber(data.net_amount),
-        sanitizeNumber(data.original_total_price),
-        sanitizeNumber(data.qty),
-        packetBarcode,  // Use the processed packet barcode (could be null)
-        data.packet_wt ? parseFloat(data.packet_wt) : null,
-        packImagesJson,
-        data.estimate_number,
-        code
-      ];
-      
-      const [updateResult] = await db.query(updateSql, updateValues);
-      resultAction = 'updated';
-      
-      return res.status(200).json({ 
-        success: true,
-        message: "Estimate entry updated successfully",
-        estimate_number: data.estimate_number,
-        order_number: orderNumber,
-        order_date: orderDate,
-        packet_barcode: packetBarcode,
-        navigation_path: navigationPath,
-        source_by: sourceBy,
-        salesperson_id: salespersonId,
-        customer_id: customerId
-      });
-    } else {
-      // INSERT new entry
-      console.log("Inserting new estimate entry...");
+    // For force_insert, always insert new row (don't check for existing)
+    if (data.force_insert) {
+      // INSERT new entry without checking for existing
+      console.log("Force insert mode - inserting new estimate entry...");
       console.log("Packet barcode for insertion:", packetBarcode);
       
       const insertSql = `
@@ -439,20 +344,19 @@ router.post("/add/estimate", async (req, res) => {
         estimateStatus,
         sanitizeNumber(data.original_total_price),
         sanitizeNumber(data.qty),
-        packetBarcode,  // Use the processed packet barcode (could be null)
+        packetBarcode,  // This will be NULL if no packet was scanned
         data.packet_wt ? parseFloat(data.packet_wt) : null,
         packImagesJson
       ];
 
       const [result] = await db.query(insertSql, insertValues);
-      resultAction = 'inserted';
 
-      // AFTER SUCCESSFUL INSERT - SEND NOTIFICATION AND SAVE TO DATABASE
+      // Send notifications (same as before...)
       if (sourceBy === 'salesman' && salespersonId) {
         const adminUserId = 1;
         
         const notificationTitle = `New Estimate Created`;
-        const notificationMessage = `🆕 New estimate #${data.estimate_number} created by salesperson ${salespersonId} for ${customerName || 'Customer'}`;
+        const notificationMessage = `🆕 New estimate #${data.estimate_number} created by salesperson for ${customerName || 'Customer'}`;
         
         await insertNotification(
           adminUserId,
@@ -490,7 +394,7 @@ router.post("/add/estimate", async (req, res) => {
         );
       } else if (customerId) {
         const notificationTitle = `Estimate Created`;
-        const notificationMessage = `📋 Your estimate #${data.estimate_number} has been created successfully with total amount ₹${sanitizeNumber(data.net_amount).toFixed(2)}`;
+        const notificationMessage = `📋 Your estimate #${data.estimate_number} has been created successfully`;
         
         await insertNotification(
           customerId,
@@ -528,10 +432,323 @@ router.post("/add/estimate", async (req, res) => {
         salesperson_id: salespersonId,
         customer_id: customerId
       });
+    } else {
+      // Regular insert - check for existing entry
+      const [existingEntryCheck] = await db.query(
+        "SELECT COUNT(*) AS count FROM estimate WHERE estimate_number = ? AND code = ?",
+        [data.estimate_number, code]
+      );
+
+      if (existingEntryCheck[0].count > 0) {
+        // Update existing entry
+        console.log("Updating existing entry with same barcode...");
+        
+        let updateSql = `
+          UPDATE estimate SET
+            date=?, pcode=?, salesperson_id=?, source_by=?, customer_id=?, customer_name=?, 
+            estimate_status=?, order_number=?, order_date=?, 
+            opentag_id=?, code=?, product_id=?, product_name=?, metal_type=?, design_name=?, purity=?,
+            category=?, sub_category=?, gross_weight=?, stone_weight=?, stone_price=?, 
+            weight_bw=?, va_on=?, va_percent=?, wastage_weight=?, msp_va_percent=?, 
+            msp_wastage_weight=?, total_weight_av=?, mc_on=?, mc_per_gram=?, making_charges=?, 
+            rate=?, rate_amt=?, tax_percent=?, tax_amt=?, total_price=?, pricing=?, pieace_cost=?, 
+            disscount_percentage=?, disscount=?, hm_charges=?, total_amount=?, taxable_amount=?, 
+            tax_amount=?, net_amount=?, original_total_price=?, qty=?, packet_barcode=?, packet_wt=?, 
+            pack_images=?, updated_at = NOW()
+          WHERE estimate_number = ? AND code = ?`;
+        
+        const updateValues = [
+          data.date,
+          data.pcode || null,
+          salespersonId,
+          sourceBy,
+          customerId,
+          customerName,
+          estimateStatus,
+          orderNumber,
+          orderDate,
+          sanitizeNumber(data.opentag_id),
+          code,
+          data.product_id,
+          data.product_name,
+          data.metal_type,
+          data.design_name,
+          data.purity,
+          category,
+          subCategory,
+          sanitizeNumber(data.gross_weight),
+          sanitizeNumber(data.stone_weight),
+          sanitizeNumber(data.stone_price),
+          sanitizeNumber(data.weight_bw),
+          data.va_on,
+          sanitizeNumber(data.va_percent),
+          sanitizeNumber(data.wastage_weight),
+          sanitizeNumber(data.msp_va_percent),
+          sanitizeNumber(data.msp_wastage_weight),
+          sanitizeNumber(data.total_weight_av),
+          data.mc_on,
+          sanitizeNumber(data.mc_per_gram),
+          sanitizeNumber(data.making_charges),
+          sanitizeNumber(data.rate),
+          sanitizeNumber(data.rate_amt),
+          sanitizeNumeric(data.tax_percent),
+          sanitizeNumber(data.tax_amt),
+          sanitizeNumber(data.total_price),
+          data.pricing,
+          sanitizeNumber(data.pieace_cost),
+          sanitizeNumber(data.disscount_percentage),
+          sanitizeNumber(data.disscount),
+          sanitizeNumber(data.hm_charges),
+          sanitizeNumber(data.total_amount),
+          sanitizeNumber(data.taxable_amount),
+          sanitizeNumber(data.tax_amount),
+          sanitizeNumber(data.net_amount),
+          sanitizeNumber(data.original_total_price),
+          sanitizeNumber(data.qty),
+          packetBarcode,
+          data.packet_wt ? parseFloat(data.packet_wt) : null,
+          packImagesJson,
+          data.estimate_number,
+          code
+        ];
+        
+        const [updateResult] = await db.query(updateSql, updateValues);
+        
+        return res.status(200).json({ 
+          success: true,
+          message: "Estimate entry updated successfully",
+          estimate_number: data.estimate_number,
+          order_number: orderNumber,
+          order_date: orderDate,
+          packet_barcode: packetBarcode,
+          navigation_path: navigationPath,
+          source_by: sourceBy,
+          salesperson_id: salespersonId,
+          customer_id: customerId
+        });
+      } else {
+        // INSERT new entry
+        console.log("Inserting new estimate entry...");
+        console.log("Packet barcode for insertion:", packetBarcode);
+        
+        const insertSql = `
+          INSERT INTO estimate (
+            date, pcode, salesperson_id, source_by, customer_id, customer_name, 
+            estimate_number, order_number, order_date, opentag_id, code, product_id, 
+            product_name, metal_type, design_name, purity, category, sub_category, 
+            gross_weight, stone_weight, stone_price, weight_bw, va_on, va_percent, 
+            wastage_weight, msp_va_percent, msp_wastage_weight, total_weight_av, 
+            mc_on, mc_per_gram, making_charges, rate, rate_amt, tax_percent, 
+            tax_amt, total_price, pricing, pieace_cost, disscount_percentage, 
+            disscount, hm_charges, total_amount, taxable_amount, tax_amount, 
+            net_amount, estimate_status, original_total_price, qty, packet_barcode, 
+            packet_wt, pack_images
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+
+        const insertValues = [
+          data.date,
+          data.pcode || null,
+          salespersonId,
+          sourceBy,
+          customerId,
+          customerName,
+          data.estimate_number,
+          orderNumber,
+          orderDate,
+          sanitizeNumber(data.opentag_id),
+          code,
+          data.product_id,
+          data.product_name,
+          data.metal_type,
+          data.design_name,
+          data.purity,
+          category,
+          subCategory,
+          sanitizeNumber(data.gross_weight),
+          sanitizeNumber(data.stone_weight),
+          sanitizeNumber(data.stone_price),
+          sanitizeNumber(data.weight_bw),
+          data.va_on,
+          sanitizeNumber(data.va_percent),
+          sanitizeNumber(data.wastage_weight),
+          sanitizeNumber(data.msp_va_percent),
+          sanitizeNumber(data.msp_wastage_weight),
+          sanitizeNumber(data.total_weight_av),
+          data.mc_on,
+          sanitizeNumber(data.mc_per_gram),
+          sanitizeNumber(data.making_charges),
+          sanitizeNumber(data.rate),
+          sanitizeNumber(data.rate_amt),
+          sanitizeNumeric(data.tax_percent),
+          sanitizeNumber(data.tax_amt),
+          sanitizeNumber(data.total_price),
+          data.pricing,
+          sanitizeNumber(data.pieace_cost),
+          sanitizeNumber(data.disscount_percentage),
+          sanitizeNumber(data.disscount),
+          sanitizeNumber(data.hm_charges),
+          sanitizeNumber(data.total_amount),
+          sanitizeNumber(data.taxable_amount),
+          sanitizeNumber(data.tax_amount),
+          sanitizeNumber(data.net_amount),
+          estimateStatus,
+          sanitizeNumber(data.original_total_price),
+          sanitizeNumber(data.qty),
+          packetBarcode,
+          data.packet_wt ? parseFloat(data.packet_wt) : null,
+          packImagesJson
+        ];
+
+        const [result] = await db.query(insertSql, insertValues);
+
+        // Send notifications (same as above)
+        if (sourceBy === 'salesman' && salespersonId) {
+          const adminUserId = 1;
+          
+          const notificationTitle = `New Estimate Created`;
+          const notificationMessage = `🆕 New estimate #${data.estimate_number} created by salesperson for ${customerName || 'Customer'}`;
+          
+          await insertNotification(
+            adminUserId,
+            'admin',
+            notificationTitle,
+            notificationMessage,
+            'NEW_ESTIMATE',
+            result.insertId
+          );
+          
+          if (global.sendAdminNotification) {
+            const notification = {
+              type: 'NEW_ESTIMATE',
+              id: Date.now(),
+              estimate_number: data.estimate_number,
+              customer_name: customerName,
+              salesperson_id: salespersonId,
+              total_amount: sanitizeNumber(data.net_amount),
+              timestamp: new Date().toISOString(),
+              message: notificationMessage,
+              action_by: 'salesperson',
+              notification_id: result.insertId
+            };
+            global.sendAdminNotification(notification);
+            console.log('✅ New estimate notification sent to admin');
+          }
+          
+          await insertNotification(
+            salespersonId,
+            'salesman',
+            'Estimate Created',
+            `Your estimate #${data.estimate_number} has been created successfully for ${customerName || 'Customer'}`,
+            'ESTIMATE_CREATED',
+            result.insertId
+          );
+        } else if (customerId) {
+          const notificationTitle = `Estimate Created`;
+          const notificationMessage = `📋 Your estimate #${data.estimate_number} has been created successfully`;
+          
+          await insertNotification(
+            customerId,
+            'customer',
+            notificationTitle,
+            notificationMessage,
+            'ESTIMATE_CREATED',
+            result.insertId
+          );
+          
+          if (global.sendCustomerNotification) {
+            const notification = {
+              type: 'ESTIMATE_CREATED',
+              id: Date.now(),
+              estimate_number: data.estimate_number,
+              total_amount: sanitizeNumber(data.net_amount),
+              timestamp: new Date().toISOString(),
+              message: notificationMessage
+            };
+            global.sendCustomerNotification(customerId, notification);
+            console.log(`✅ Estimate notification sent to customer ${customerId}`);
+          }
+        }
+
+        return res.status(200).json({ 
+          success: true,
+          message: "Estimate added successfully", 
+          id: result.insertId,
+          estimate_number: data.estimate_number,
+          order_number: orderNumber,
+          order_date: orderDate,
+          packet_barcode: packetBarcode,
+          navigation_path: navigationPath,
+          source_by: sourceBy,
+          salesperson_id: salespersonId,
+          customer_id: customerId
+        });
+      }
     }
   } catch (err) {
     console.error("Error inserting/updating estimate:", err);
     console.error("Error SQL:", err.sql);
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+
+// Update packet barcode for all entries with same estimate_number
+router.put("/update/estimate-packet/:estimate_number", async (req, res) => {
+  try {
+    const estimateNumber = req.params.estimate_number;
+    const { packet_barcode, packet_wt } = req.body;
+    
+    if (!estimateNumber) {
+      return res.status(400).json({ message: "Estimate number is required" });
+    }
+    
+    console.log(`Updating packet barcode for estimate: ${estimateNumber}`);
+    console.log(`New packet_barcode: ${packet_barcode}`);
+    
+    const [result] = await db.query(
+      "UPDATE estimate SET packet_barcode = ?, packet_wt = ?, updated_at = NOW() WHERE estimate_number = ?",
+      [packet_barcode || null, packet_wt ? parseFloat(packet_wt) : null, estimateNumber]
+    );
+    
+    console.log(`Updated ${result.affectedRows} entries with packet barcode: ${packet_barcode}`);
+    
+    res.json({ 
+      success: true, 
+      message: "Packet barcode updated successfully",
+      affected_rows: result.affectedRows,
+      packet_barcode: packet_barcode
+    });
+  } catch (err) {
+    console.error("Error updating packet barcode:", err);
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// Update estimate images for all entries with same estimate_number
+router.post("/update/estimate-images", async (req, res) => {
+  try {
+    const { estimate_number, pack_images } = req.body;
+    
+    if (!estimate_number) {
+      return res.status(400).json({ message: "Estimate number is required" });
+    }
+    
+    const packImagesJson = JSON.stringify(pack_images || []);
+    
+    const [result] = await db.query(
+      "UPDATE estimate SET pack_images = ?, updated_at = NOW() WHERE estimate_number = ?",
+      [packImagesJson, estimate_number]
+    );
+    
+    console.log(`Updated ${result.affectedRows} entries with pack images for estimate: ${estimate_number}`);
+    
+    res.json({ 
+      success: true, 
+      message: "Images updated successfully",
+      affected_rows: result.affectedRows
+    });
+  } catch (err) {
+    console.error("Error updating estimate images:", err);
     res.status(500).json({ message: "Server error", error: err.message });
   }
 });
