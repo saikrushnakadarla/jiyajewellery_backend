@@ -9,6 +9,30 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
+// Function to generate next customer ID
+async function generateCustomerId() {
+  try {
+    // Get the latest customer_id from users table (only for role = 'customer')
+    const [rows] = await db.query(
+      "SELECT customer_id FROM users WHERE role = 'customer' AND customer_id IS NOT NULL ORDER BY id DESC LIMIT 1"
+    );
+    
+    let nextNumber = 1;
+    if (rows.length > 0 && rows[0].customer_id) {
+      const match = rows[0].customer_id.match(/CUST-(\d+)/);
+      if (match) {
+        nextNumber = parseInt(match[1]) + 1;
+      }
+    }
+    
+    // Format with leading zeros (CUST-001, CUST-002, etc.)
+    return `CUST-${String(nextNumber).padStart(3, '0')}`;
+  } catch (error) {
+    console.error('Error generating customer ID:', error);
+    return `CUST-${Date.now()}`;
+  }
+}
+
 // Configure multer for face photo uploads
 const faceStorage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -77,7 +101,7 @@ const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
-// Store OTPs temporarily (in production, use Redis or database)
+// Store OTPs temporarily
 const otpStore = new Map();
 
 // Clean up expired OTPs every hour
@@ -177,7 +201,8 @@ router.get('/api/users', async (req, res) => {
     const [results] = await db.query(`
       SELECT id, full_name, email_id, phone, date_of_birth, gender, designation, 
              date_of_anniversary, country, state, city, district,
-             company_name, role, status, email_verified, pincode, face_photo_path, profile_photo_path, latitude, longitude 
+             company_name, role, status, email_verified, pincode, face_photo_path, 
+             profile_photo_path, latitude, longitude, customer_id
       FROM users
     `);
     res.json(results);
@@ -194,7 +219,8 @@ router.get('/api/users/:id', async (req, res) => {
     const [results] = await db.query(`
       SELECT id, full_name, email_id, phone, date_of_birth, gender, designation, 
              date_of_anniversary, country, state, city, district,
-             company_name, role, status, email_verified, pincode, face_photo_path, profile_photo_path, latitude, longitude 
+             company_name, role, status, email_verified, pincode, face_photo_path, 
+             profile_photo_path, latitude, longitude, customer_id
       FROM users WHERE id = ?
     `, [id]);
 
@@ -265,13 +291,19 @@ router.post('/api/users',
       ? req.files.profile_photo[0].filename 
       : null;
 
+    // Generate customer_id only for role = 'customer'
+    let customerId = null;
+    if (role === 'customer') {
+      customerId = await generateCustomerId();
+    }
+
     const insertQuery = `
       INSERT INTO users (
         full_name, email_id, phone, date_of_birth, gender, designation,
         date_of_anniversary, country, state, city, district,
         password, confirm_password, company_name, role, status, email_verified, pincode,
-        face_descriptor, face_photo_path, profile_photo_path, latitude, longitude
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        face_descriptor, face_photo_path, profile_photo_path, latitude, longitude, customer_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const [result] = await db.query(insertQuery, [
@@ -297,7 +329,8 @@ router.post('/api/users',
       facePhotoPath,
       profilePhotoPath,
       latitude || null,
-      longitude || null
+      longitude || null,
+      customerId
     ]);
 
     res.status(201).json({
@@ -305,7 +338,8 @@ router.post('/api/users',
       message: 'User created successfully',
       email_id,
       face_photo: facePhotoPath,
-      profile_photo: profilePhotoPath
+      profile_photo: profilePhotoPath,
+      customer_id: customerId
     });
 
   } catch (err) {
@@ -460,19 +494,16 @@ router.post('/api/users/send-otp/:userId', async (req, res) => {
 
     const user = users[0];
 
-    // Check if user is approved
     if (user.status !== 'approved') {
       return res.status(403).json({ message: 'Account not approved yet' });
     }
 
-    // Check if already verified
     if (user.email_verified === 'Verified') {
       return res.status(400).json({ message: 'Email already verified' });
     }
 
-    // Generate and store OTP
     const otp = generateOTP();
-    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+    const expiresAt = Date.now() + 10 * 60 * 1000;
 
     otpStore.set(user.email_id, {
       otp,
@@ -480,7 +511,6 @@ router.post('/api/users/send-otp/:userId', async (req, res) => {
       attempts: 0
     });
 
-    // Send OTP email
     await sendOTPEmail(user.email_id, user.full_name, otp);
 
     res.json({ 
@@ -526,7 +556,6 @@ router.post('/api/users/verify-otp', async (req, res) => {
       return res.status(400).json({ message: 'Invalid OTP. Please try again.' });
     }
 
-    // Update user's email_verified status
     const [result] = await db.query(
       'UPDATE users SET email_verified = "Verified" WHERE email_id = ?',
       [email]
@@ -536,7 +565,6 @@ router.post('/api/users/verify-otp', async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Remove OTP from store
     otpStore.delete(email);
 
     res.json({ 
