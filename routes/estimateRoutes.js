@@ -5,9 +5,6 @@ const fs = require('fs').promises;
 const path = require('path');
 const multer = require('multer');
 
-// At the top of estimateRoutes.js, after other imports
-// global.sendAdminNotification is available from index.js
-
 // Configure multer for pack image uploads
 const packImageStorage = multer.diskStorage({
   destination: async (req, file, cb) => {
@@ -28,7 +25,7 @@ const packImageStorage = multer.diskStorage({
 
 const uploadPackImage = multer({ 
   storage: packImageStorage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
@@ -104,53 +101,6 @@ const generateOrderNumber = async () => {
   }
 };
 
-// Helper function to generate packet barcode
-const generatePacketBarcode = async () => {
-  try {
-    const connection = await db.getConnection();
-    
-    try {
-      await connection.beginTransaction();
-      
-      const [results] = await connection.query(
-        "SELECT packet_barcode FROM estimate WHERE packet_barcode IS NOT NULL AND packet_barcode LIKE 'PKT%' ORDER BY estimate_id DESC LIMIT 1"
-      );
-      
-      let sequence = 1;
-      
-      if (results.length > 0 && results[0].packet_barcode) {
-        const lastBarcode = results[0].packet_barcode;
-        
-        const match = lastBarcode.match(/^PKT(\d+)$/);
-        if (match) {
-          const num = parseInt(match[1], 10);
-          if (!isNaN(num)) {
-            sequence = num + 1;
-          }
-        }
-      }
-      
-      const packetBarcode = `PKT${String(sequence).padStart(5, "0")}`;
-      
-      await connection.commit();
-      
-      console.log(`Generated new packet barcode: ${packetBarcode}`);
-      return packetBarcode;
-      
-    } catch (err) {
-      await connection.rollback();
-      throw err;
-    } finally {
-      connection.release();
-    }
-    
-  } catch (err) {
-    console.error("Error generating packet barcode:", err);
-    const timestamp = Date.now().toString().slice(-8);
-    return `PKT${timestamp}`;
-  }
-};
-
 // Upload pack image endpoint
 router.post("/upload/pack-image", uploadPackImage.single('image'), async (req, res) => {
   try {
@@ -190,16 +140,14 @@ router.post("/upload/pack-images", uploadPackImage.array('images', 10), async (r
   }
 });
 
-// Add/Update estimate with navigation logic
-
-// Add/Update estimate with navigation logic - FIXED VERSION
+// FIXED: Main Add/Update estimate endpoint
 router.post("/add/estimate", async (req, res) => {
   try {
     const data = req.body;
     console.log("=== RECEIVING ESTIMATE DATA ===");
     console.log("Received packet_barcode:", data.packet_barcode);
-    console.log("Type of packet_barcode:", typeof data.packet_barcode);
-    console.log("Force insert flag:", data.force_insert);
+    console.log("total_price:", data.total_price);
+    console.log("net_amount:", data.net_amount);
     
     if (!data.date || !data.estimate_number) {
       return res.status(400).json({ message: "Missing required fields: date and estimate_number" });
@@ -224,24 +172,12 @@ router.post("/add/estimate", async (req, res) => {
       console.log('Generated order number for customer:', orderNumber);
     }
 
-    // CRITICAL FIX: Handle packet barcode correctly
-    // NEVER auto-generate packet barcode for new product entries
-    // Only use the value sent from frontend (which could be null or a specific barcode)
+    // Handle packet barcode correctly
     let packetBarcode = data.packet_barcode;
     
-    // Check if the value is a valid string (not null, undefined, or empty)
-    if (packetBarcode === undefined || packetBarcode === null) {
+    if (packetBarcode === undefined || packetBarcode === null || packetBarcode === "" || packetBarcode === "null" || packetBarcode === "NULL") {
       packetBarcode = null;
       console.log('No packet barcode provided - setting to NULL');
-    } else if (packetBarcode === "" || packetBarcode === "null" || packetBarcode === "NULL") {
-      packetBarcode = null;
-      console.log('Empty packet barcode - setting to NULL');
-    } else if (typeof packetBarcode === 'string' && packetBarcode.trim() === '') {
-      packetBarcode = null;
-      console.log('Empty string packet barcode - setting to NULL');
-    } else {
-      // Use the provided packet barcode as-is
-      console.log('Using provided packet barcode:', packetBarcode);
     }
 
     // Process pack images
@@ -250,14 +186,11 @@ router.post("/add/estimate", async (req, res) => {
       try {
         packImages = JSON.parse(packImages);
       } catch {
-        packImages = packImages ? [packImages] : [];
+        packImages = [];
       }
     }
+    if (!Array.isArray(packImages)) packImages = [];
     
-    if (!Array.isArray(packImages)) {
-      packImages = [];
-    }
-
     const packImagesJson = JSON.stringify(packImages);
 
     let estimateStatus;
@@ -267,7 +200,7 @@ router.post("/add/estimate", async (req, res) => {
       estimateStatus = data.estimate_status || "Pending";
     }
 
-    // Determine navigation path based on who created the estimate
+    // Determine navigation path
     let navigationPath = null;
     if (sourceBy === 'salesman' && salespersonId) {
       navigationPath = `/salesperson-transactions/${salespersonId}`;
@@ -275,11 +208,65 @@ router.post("/add/estimate", async (req, res) => {
       navigationPath = `/customer-transactions/${customerId}`;
     }
 
-    // For force_insert, always insert new row (don't check for existing)
+    // Prepare values array - EXACTLY 50 placeholders
+    const insertValues = [
+      data.date,                                    // 1
+      data.pcode || null,                           // 2
+      salespersonId,                                // 3
+      sourceBy,                                     // 4
+      customerId,                                   // 5
+      customerName,                                 // 6
+      data.estimate_number,                         // 7
+      orderNumber,                                  // 8
+      orderDate,                                    // 9
+      sanitizeNumber(data.opentag_id),              // 10
+      code,                                         // 11
+      data.product_id,                              // 12
+      data.product_name,                            // 13
+      data.metal_type,                              // 14
+      data.design_name,                             // 15
+      data.purity,                                  // 16
+      category,                                     // 17
+      subCategory,                                  // 18
+      sanitizeNumber(data.gross_weight),            // 19
+      sanitizeNumber(data.stone_weight),            // 20
+      sanitizeNumber(data.stone_price),             // 21
+      sanitizeNumber(data.weight_bw),               // 22
+      data.va_on,                                   // 23
+      sanitizeNumber(data.va_percent),              // 24
+      sanitizeNumber(data.wastage_weight),          // 25
+      sanitizeNumber(data.total_weight_av),         // 26
+      data.mc_on,                                   // 27
+      sanitizeNumber(data.mc_per_gram),             // 28
+      sanitizeNumber(data.making_charges),          // 29
+      sanitizeNumber(data.rate),                    // 30
+      sanitizeNumber(data.rate_amt),                // 31
+      sanitizeNumeric(data.tax_percent),            // 32
+      sanitizeNumber(data.tax_amt),                 // 33
+      sanitizeNumber(data.total_price),             // 34
+      data.pricing,                                 // 35
+      sanitizeNumber(data.pieace_cost),             // 36
+      sanitizeNumber(data.disscount_percentage),    // 37
+      sanitizeNumber(data.disscount),               // 38
+      sanitizeNumber(data.hm_charges),              // 39
+      sanitizeNumber(data.total_amount),            // 40
+      sanitizeNumber(data.taxable_amount),          // 41
+      sanitizeNumber(data.tax_amount),              // 42
+      sanitizeNumber(data.net_amount),              // 43
+      estimateStatus,                               // 44
+      sanitizeNumber(data.original_total_price),    // 45
+      sanitizeNumber(data.qty),                     // 46
+      packetBarcode,                                // 47
+      data.packet_wt ? parseFloat(data.packet_wt) : null, // 48
+      packImagesJson                                // 49
+    ];
+
+    // Check if we're using force_insert mode or regular insert
     if (data.force_insert) {
-      // INSERT new entry without checking for existing
       console.log("Force insert mode - inserting new estimate entry...");
-      console.log("Packet barcode for insertion:", packetBarcode);
+      
+      // Count the number of placeholders - should be 49
+      const placeholders = insertValues.map(() => '?').join(',');
       
       const insertSql = `
         INSERT INTO estimate (
@@ -287,71 +274,20 @@ router.post("/add/estimate", async (req, res) => {
           estimate_number, order_number, order_date, opentag_id, code, product_id, 
           product_name, metal_type, design_name, purity, category, sub_category, 
           gross_weight, stone_weight, stone_price, weight_bw, va_on, va_percent, 
-          wastage_weight, msp_va_percent, msp_wastage_weight, total_weight_av, 
-          mc_on, mc_per_gram, making_charges, rate, rate_amt, tax_percent, 
-          tax_amt, total_price, pricing, pieace_cost, disscount_percentage, 
-          disscount, hm_charges, total_amount, taxable_amount, tax_amount, 
-          net_amount, estimate_status, original_total_price, qty, packet_barcode, 
-          packet_wt, pack_images
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+          wastage_weight, total_weight_av, mc_on, mc_per_gram, making_charges, 
+          rate, rate_amt, tax_percent, tax_amt, total_price, pricing, pieace_cost, 
+          disscount_percentage, disscount, hm_charges, total_amount, taxable_amount, 
+          tax_amount, net_amount, estimate_status, original_total_price, qty, 
+          packet_barcode, packet_wt, pack_images
+        ) VALUES (${placeholders})
+      `;
 
-      const insertValues = [
-        data.date,
-        data.pcode || null,
-        salespersonId,
-        sourceBy,
-        customerId,
-        customerName,
-        data.estimate_number,
-        orderNumber,
-        orderDate,
-        sanitizeNumber(data.opentag_id),
-        code,
-        data.product_id,
-        data.product_name,
-        data.metal_type,
-        data.design_name,
-        data.purity,
-        category,
-        subCategory,
-        sanitizeNumber(data.gross_weight),
-        sanitizeNumber(data.stone_weight),
-        sanitizeNumber(data.stone_price),
-        sanitizeNumber(data.weight_bw),
-        data.va_on,
-        sanitizeNumber(data.va_percent),
-        sanitizeNumber(data.wastage_weight),
-        sanitizeNumber(data.msp_va_percent),
-        sanitizeNumber(data.msp_wastage_weight),
-        sanitizeNumber(data.total_weight_av),
-        data.mc_on,
-        sanitizeNumber(data.mc_per_gram),
-        sanitizeNumber(data.making_charges),
-        sanitizeNumber(data.rate),
-        sanitizeNumber(data.rate_amt),
-        sanitizeNumeric(data.tax_percent),
-        sanitizeNumber(data.tax_amt),
-        sanitizeNumber(data.total_price),
-        data.pricing,
-        sanitizeNumber(data.pieace_cost),
-        sanitizeNumber(data.disscount_percentage),
-        sanitizeNumber(data.disscount),
-        sanitizeNumber(data.hm_charges),
-        sanitizeNumber(data.total_amount),
-        sanitizeNumber(data.taxable_amount),
-        sanitizeNumber(data.tax_amount),
-        sanitizeNumber(data.net_amount),
-        estimateStatus,
-        sanitizeNumber(data.original_total_price),
-        sanitizeNumber(data.qty),
-        packetBarcode,  // This will be NULL if no packet was scanned
-        data.packet_wt ? parseFloat(data.packet_wt) : null,
-        packImagesJson
-      ];
-
+      console.log("SQL Query:", insertSql);
+      console.log("Values count:", insertValues.length);
+      
       const [result] = await db.query(insertSql, insertValues);
 
-      // Send notifications (same as before...)
+      // Send notifications
       if (sourceBy === 'salesman' && salespersonId) {
         const adminUserId = 1;
         
@@ -427,6 +363,8 @@ router.post("/add/estimate", async (req, res) => {
         order_number: orderNumber,
         order_date: orderDate,
         packet_barcode: packetBarcode,
+        total_price: data.total_price,
+        net_amount: data.net_amount,
         navigation_path: navigationPath,
         source_by: sourceBy,
         salesperson_id: salespersonId,
@@ -443,74 +381,23 @@ router.post("/add/estimate", async (req, res) => {
         // Update existing entry
         console.log("Updating existing entry with same barcode...");
         
-        let updateSql = `
+        const placeholders = insertValues.map(() => '?').join(',');
+        
+        const updateSql = `
           UPDATE estimate SET
             date=?, pcode=?, salesperson_id=?, source_by=?, customer_id=?, customer_name=?, 
             estimate_status=?, order_number=?, order_date=?, 
             opentag_id=?, code=?, product_id=?, product_name=?, metal_type=?, design_name=?, purity=?,
             category=?, sub_category=?, gross_weight=?, stone_weight=?, stone_price=?, 
-            weight_bw=?, va_on=?, va_percent=?, wastage_weight=?, msp_va_percent=?, 
-            msp_wastage_weight=?, total_weight_av=?, mc_on=?, mc_per_gram=?, making_charges=?, 
-            rate=?, rate_amt=?, tax_percent=?, tax_amt=?, total_price=?, pricing=?, pieace_cost=?, 
-            disscount_percentage=?, disscount=?, hm_charges=?, total_amount=?, taxable_amount=?, 
-            tax_amount=?, net_amount=?, original_total_price=?, qty=?, packet_barcode=?, packet_wt=?, 
+            weight_bw=?, va_on=?, va_percent=?, wastage_weight=?, total_weight_av=?, 
+            mc_on=?, mc_per_gram=?, making_charges=?, rate=?, rate_amt=?, tax_percent=?, 
+            tax_amt=?, total_price=?, pricing=?, pieace_cost=?, disscount_percentage=?, 
+            disscount=?, hm_charges=?, total_amount=?, taxable_amount=?, tax_amount=?, 
+            net_amount=?, original_total_price=?, qty=?, packet_barcode=?, packet_wt=?, 
             pack_images=?, updated_at = NOW()
           WHERE estimate_number = ? AND code = ?`;
         
-        const updateValues = [
-          data.date,
-          data.pcode || null,
-          salespersonId,
-          sourceBy,
-          customerId,
-          customerName,
-          estimateStatus,
-          orderNumber,
-          orderDate,
-          sanitizeNumber(data.opentag_id),
-          code,
-          data.product_id,
-          data.product_name,
-          data.metal_type,
-          data.design_name,
-          data.purity,
-          category,
-          subCategory,
-          sanitizeNumber(data.gross_weight),
-          sanitizeNumber(data.stone_weight),
-          sanitizeNumber(data.stone_price),
-          sanitizeNumber(data.weight_bw),
-          data.va_on,
-          sanitizeNumber(data.va_percent),
-          sanitizeNumber(data.wastage_weight),
-          sanitizeNumber(data.msp_va_percent),
-          sanitizeNumber(data.msp_wastage_weight),
-          sanitizeNumber(data.total_weight_av),
-          data.mc_on,
-          sanitizeNumber(data.mc_per_gram),
-          sanitizeNumber(data.making_charges),
-          sanitizeNumber(data.rate),
-          sanitizeNumber(data.rate_amt),
-          sanitizeNumeric(data.tax_percent),
-          sanitizeNumber(data.tax_amt),
-          sanitizeNumber(data.total_price),
-          data.pricing,
-          sanitizeNumber(data.pieace_cost),
-          sanitizeNumber(data.disscount_percentage),
-          sanitizeNumber(data.disscount),
-          sanitizeNumber(data.hm_charges),
-          sanitizeNumber(data.total_amount),
-          sanitizeNumber(data.taxable_amount),
-          sanitizeNumber(data.tax_amount),
-          sanitizeNumber(data.net_amount),
-          sanitizeNumber(data.original_total_price),
-          sanitizeNumber(data.qty),
-          packetBarcode,
-          data.packet_wt ? parseFloat(data.packet_wt) : null,
-          packImagesJson,
-          data.estimate_number,
-          code
-        ];
+        const updateValues = [...insertValues, data.estimate_number, code];
         
         const [updateResult] = await db.query(updateSql, updateValues);
         
@@ -521,6 +408,8 @@ router.post("/add/estimate", async (req, res) => {
           order_number: orderNumber,
           order_date: orderDate,
           packet_barcode: packetBarcode,
+          total_price: data.total_price,
+          net_amount: data.net_amount,
           navigation_path: navigationPath,
           source_by: sourceBy,
           salesperson_id: salespersonId,
@@ -529,7 +418,8 @@ router.post("/add/estimate", async (req, res) => {
       } else {
         // INSERT new entry
         console.log("Inserting new estimate entry...");
-        console.log("Packet barcode for insertion:", packetBarcode);
+        
+        const placeholders = insertValues.map(() => '?').join(',');
         
         const insertSql = `
           INSERT INTO estimate (
@@ -537,71 +427,16 @@ router.post("/add/estimate", async (req, res) => {
             estimate_number, order_number, order_date, opentag_id, code, product_id, 
             product_name, metal_type, design_name, purity, category, sub_category, 
             gross_weight, stone_weight, stone_price, weight_bw, va_on, va_percent, 
-            wastage_weight, msp_va_percent, msp_wastage_weight, total_weight_av, 
-            mc_on, mc_per_gram, making_charges, rate, rate_amt, tax_percent, 
-            tax_amt, total_price, pricing, pieace_cost, disscount_percentage, 
-            disscount, hm_charges, total_amount, taxable_amount, tax_amount, 
-            net_amount, estimate_status, original_total_price, qty, packet_barcode, 
-            packet_wt, pack_images
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
-
-        const insertValues = [
-          data.date,
-          data.pcode || null,
-          salespersonId,
-          sourceBy,
-          customerId,
-          customerName,
-          data.estimate_number,
-          orderNumber,
-          orderDate,
-          sanitizeNumber(data.opentag_id),
-          code,
-          data.product_id,
-          data.product_name,
-          data.metal_type,
-          data.design_name,
-          data.purity,
-          category,
-          subCategory,
-          sanitizeNumber(data.gross_weight),
-          sanitizeNumber(data.stone_weight),
-          sanitizeNumber(data.stone_price),
-          sanitizeNumber(data.weight_bw),
-          data.va_on,
-          sanitizeNumber(data.va_percent),
-          sanitizeNumber(data.wastage_weight),
-          sanitizeNumber(data.msp_va_percent),
-          sanitizeNumber(data.msp_wastage_weight),
-          sanitizeNumber(data.total_weight_av),
-          data.mc_on,
-          sanitizeNumber(data.mc_per_gram),
-          sanitizeNumber(data.making_charges),
-          sanitizeNumber(data.rate),
-          sanitizeNumber(data.rate_amt),
-          sanitizeNumeric(data.tax_percent),
-          sanitizeNumber(data.tax_amt),
-          sanitizeNumber(data.total_price),
-          data.pricing,
-          sanitizeNumber(data.pieace_cost),
-          sanitizeNumber(data.disscount_percentage),
-          sanitizeNumber(data.disscount),
-          sanitizeNumber(data.hm_charges),
-          sanitizeNumber(data.total_amount),
-          sanitizeNumber(data.taxable_amount),
-          sanitizeNumber(data.tax_amount),
-          sanitizeNumber(data.net_amount),
-          estimateStatus,
-          sanitizeNumber(data.original_total_price),
-          sanitizeNumber(data.qty),
-          packetBarcode,
-          data.packet_wt ? parseFloat(data.packet_wt) : null,
-          packImagesJson
-        ];
+            wastage_weight, total_weight_av, mc_on, mc_per_gram, making_charges, 
+            rate, rate_amt, tax_percent, tax_amt, total_price, pricing, pieace_cost, 
+            disscount_percentage, disscount, hm_charges, total_amount, taxable_amount, 
+            tax_amount, net_amount, estimate_status, original_total_price, qty, 
+            packet_barcode, packet_wt, pack_images
+          ) VALUES (${placeholders})`;
 
         const [result] = await db.query(insertSql, insertValues);
 
-        // Send notifications (same as above)
+        // Send notifications
         if (sourceBy === 'salesman' && salespersonId) {
           const adminUserId = 1;
           
@@ -677,6 +512,8 @@ router.post("/add/estimate", async (req, res) => {
           order_number: orderNumber,
           order_date: orderDate,
           packet_barcode: packetBarcode,
+          total_price: data.total_price,
+          net_amount: data.net_amount,
           navigation_path: navigationPath,
           source_by: sourceBy,
           salesperson_id: salespersonId,
@@ -686,11 +523,10 @@ router.post("/add/estimate", async (req, res) => {
     }
   } catch (err) {
     console.error("Error inserting/updating estimate:", err);
-    console.error("Error SQL:", err.sql);
+    console.error("Error details:", err.message);
     res.status(500).json({ message: "Server error", error: err.message });
   }
 });
-
 
 // Update packet barcode for all entries with same estimate_number
 router.put("/update/estimate-packet/:estimate_number", async (req, res) => {
@@ -812,7 +648,6 @@ router.get("/notifications/:userType/:userId", async (req, res) => {
       [userType, userId, limit]
     );
     
-    // Get unread count
     const [countResult] = await db.query(
       "SELECT COUNT(*) as unread_count FROM notifications WHERE user_type = ? AND user_id = ? AND is_read = 0",
       [userType, userId]
@@ -842,23 +677,18 @@ router.post("/update/estimate-with-packet", async (req, res) => {
       return res.status(400).json({ message: "Estimate number is required" });
     }
 
-    // Process pack images
     let packImages = data.pack_images || [];
     if (typeof packImages === 'string') {
       try {
         packImages = JSON.parse(packImages);
       } catch {
-        packImages = packImages ? [packImages] : [];
+        packImages = [];
       }
     }
+    if (!Array.isArray(packImages)) packImages = [];
     
-    if (!Array.isArray(packImages)) {
-      packImages = [];
-    }
-
     const packImagesJson = JSON.stringify(packImages);
 
-    // Update all entries with the same estimate number
     const updateSql = `
       UPDATE estimate SET
         packet_barcode = ?,
@@ -927,12 +757,10 @@ router.post("/generate-order-number/:estimate_number", async (req, res) => {
     const customerId = checkResult[0].customer_id;
     const salespersonId = checkResult[0].salesperson_id;
 
-    // Generate order number if doesn't exist
     if (!orderNumber) {
       orderNumber = await generateOrderNumber();
     }
 
-    // Update ALL rows for this estimate_number: set order_number and pdf_generated = 1
     const [updateResult] = await db.query(
       "UPDATE estimate SET order_number = ?, order_date = ?, pdf_generated = 1, updated_at = NOW() WHERE estimate_number = ?",
       [orderNumber, orderDate, estimateNumber]
@@ -940,7 +768,6 @@ router.post("/generate-order-number/:estimate_number", async (req, res) => {
 
     console.log(`Updated ${updateResult.affectedRows} rows. PDF generated: YES`);
 
-    // Send notification about order generation
     if (customerId) {
       const notificationTitle = `Order Generated`;
       const notificationMessage = `✅ Your order #${orderNumber} has been generated for estimate #${estimateNumber}`;
@@ -954,7 +781,6 @@ router.post("/generate-order-number/:estimate_number", async (req, res) => {
         estimateId
       );
       
-      // Send real-time notification
       if (global.sendCustomerNotification) {
         const notification = {
           type: 'ORDER_GENERATED',
@@ -1010,7 +836,7 @@ router.get("/get/estimates-by-source/:source", async (req, res) => {
   }
 });
 
-// Update estimate status by ID - ADD NOTIFICATIONS
+// Update estimate status by ID
 router.put("/update-estimate-status/:id", async (req, res) => {
   try {
     const id = req.params.id;
@@ -1079,11 +905,9 @@ router.put("/update-estimate-status/:id", async (req, res) => {
       return res.status(500).json({ message: "Failed to update status" });
     }
 
-    // SEND NOTIFICATION TO ADMIN AND CUSTOMER
     if (oldStatus !== estimate_status) {
-      const adminUserId = 1; // Adjust as needed
+      const adminUserId = 1;
       
-      // Notification for admin
       const adminNotificationTitle = `Estimate Status Changed`;
       const adminNotificationMessage = `📝 Estimate #${estimateNumber} status changed from ${oldStatus} to ${estimate_status}`;
       
@@ -1113,7 +937,6 @@ router.put("/update-estimate-status/:id", async (req, res) => {
         console.log('Notification sent to admin:', notification.message);
       }
       
-      // Notification for customer
       if (customerId) {
         const customerNotificationTitle = `Estimate ${estimate_status.toUpperCase()}`;
         const customerNotificationMessage = `Your estimate #${estimateNumber} has been ${estimate_status.toLowerCase()}`;
@@ -1173,19 +996,15 @@ router.put("/edit/estimate/:id", async (req, res) => {
       whereClause = "estimate_number = ?";
     }
 
-    // Process pack images
     let packImages = data.pack_images || [];
     if (typeof packImages === 'string') {
       try {
         packImages = JSON.parse(packImages);
       } catch {
-        packImages = packImages ? [packImages] : [];
+        packImages = [];
       }
     }
-    
-    if (!Array.isArray(packImages)) {
-      packImages = [];
-    }
+    if (!Array.isArray(packImages)) packImages = [];
     
     const packImagesJson = JSON.stringify(packImages);
 
@@ -1194,10 +1013,10 @@ router.put("/edit/estimate/:id", async (req, res) => {
         estimate_status=?, estimate_number=?, code=?, product_id=?, product_name=?, 
         metal_type=?, design_name=?, purity=?, category=?, sub_category=?, gross_weight=?, 
         stone_weight=?, stone_price=?, weight_bw=?, va_on=?, va_percent=?, wastage_weight=?, 
-        msp_va_percent=?, msp_wastage_weight=?, total_weight_av=?, mc_on=?, mc_per_gram=?, 
-        making_charges=?, rate=?, rate_amt=?, tax_percent=?, tax_amt=?, total_price=?,
-        pricing=?, pieace_cost=?, disscount_percentage=?, disscount=?, hm_charges=?,
-        packet_barcode=?, packet_wt=?, pack_images=?
+        total_weight_av=?, mc_on=?, mc_per_gram=?, making_charges=?, rate=?, rate_amt=?, 
+        tax_percent=?, tax_amt=?, total_price=?, pricing=?, pieace_cost=?, 
+        disscount_percentage=?, disscount=?, hm_charges=?, packet_barcode=?, packet_wt=?, 
+        pack_images=?, updated_at = NOW()
         WHERE ${whereClause}`;
 
     const updateValues = [
@@ -1224,8 +1043,6 @@ router.put("/edit/estimate/:id", async (req, res) => {
       data.va_on, 
       sanitizeNumber(data.va_percent), 
       sanitizeNumber(data.wastage_weight), 
-      sanitizeNumber(data.msp_va_percent), 
-      sanitizeNumber(data.msp_wastage_weight), 
       sanitizeNumber(data.total_weight_av), 
       data.mc_on, 
       sanitizeNumber(data.mc_per_gram), 
@@ -1268,13 +1085,11 @@ router.delete("/delete/estimate/:estimate_number", async (req, res) => {
 
     console.log(`Deleting estimate: ${estimateNumber}`);
 
-    // Get pack images to delete from filesystem
     const [estimateData] = await db.query(
       "SELECT pack_images FROM estimate WHERE estimate_number = ?",
       [estimateNumber]
     );
 
-    // Delete pack images from filesystem
     if (estimateData.length > 0 && estimateData[0].pack_images) {
       try {
         let packImages = estimateData[0].pack_images;
@@ -1301,7 +1116,6 @@ router.delete("/delete/estimate/:estimate_number", async (req, res) => {
       }
     }
 
-    // Delete PDF file if exists
     try {
       const pdfPath = path.join(__dirname, '../uploads/invoices', `${estimateNumber}.pdf`);
       await fs.access(pdfPath);
@@ -1358,17 +1172,6 @@ router.get("/next-order-number", async (req, res) => {
   } catch (err) {
     console.error("Error getting next order number:", err);
     res.status(500).json({ message: "Failed to generate order number", error: err.message });
-  }
-});
-
-// Get next packet barcode
-router.get("/next-packet-barcode", async (req, res) => {
-  try {
-    const packetBarcode = await generatePacketBarcode();
-    res.json({ success: true, packet_barcode: packetBarcode });
-  } catch (err) {
-    console.error("Error getting next packet barcode:", err);
-    res.status(500).json({ message: "Failed to generate packet barcode", error: err.message });
   }
 });
 
@@ -1442,8 +1245,6 @@ router.get("/get-estimates/:estimate_number", async (req, res) => {
       va_on: row.va_on, 
       va_percent: row.va_percent, 
       wastage_weight: row.wastage_weight, 
-      msp_va_percent: row.msp_va_percent, 
-      msp_wastage_weight: row.msp_wastage_weight, 
       total_weight_av: row.total_weight_av, 
       mc_on: row.mc_on, 
       mc_per_gram: row.mc_per_gram,
@@ -1473,22 +1274,19 @@ router.get("/get-estimates/:estimate_number", async (req, res) => {
 router.post("/save-invoice/:estimate_number", async (req, res) => {
   try {
     const estimateNumber = req.params.estimate_number;
-    const { pdfData } = req.body; // Base64 encoded PDF data
+    const { pdfData } = req.body;
 
     if (!pdfData) {
       return res.status(400).json({ message: "PDF data is required" });
     }
 
-    // Create uploads directory if not exists
     const uploadDir = path.join(__dirname, '../uploads/invoices');
     await fs.mkdir(uploadDir, { recursive: true });
 
-    // Save PDF file
     const pdfBuffer = Buffer.from(pdfData, 'base64');
     const filePath = path.join(uploadDir, `${estimateNumber}.pdf`);
     await fs.writeFile(filePath, pdfBuffer);
 
-    // Update database with invoice path
     const [result] = await db.query(
       "UPDATE estimate SET invoice_pdf = ? WHERE estimate_number = ?",
       [`/uploads/invoices/${estimateNumber}.pdf`, estimateNumber]
@@ -1516,7 +1314,6 @@ router.get("/get-invoice/:estimate_number", async (req, res) => {
 
     console.log(`Fetching invoice data for: ${estNum}`);
     
-    // Check if pdf_generated is true
     const [checkResult] = await db.query(
       "SELECT pdf_generated, order_number FROM estimate WHERE estimate_number = ? LIMIT 1",
       [estNum]
@@ -1526,7 +1323,6 @@ router.get("/get-invoice/:estimate_number", async (req, res) => {
       return res.status(404).json({ message: "Invoice not found" });
     }
 
-    // Get full estimate data
     const [results] = await db.query(
       "SELECT * FROM estimate WHERE estimate_number = ? ORDER BY estimate_id", 
       [estNum]
@@ -1536,7 +1332,6 @@ router.get("/get-invoice/:estimate_number", async (req, res) => {
       return res.status(404).json({ message: "No data found for given estimate number" });
     }
 
-    // Check if customer is authorized (for customer panel)
     const customerId = req.query.customer_id;
     if (customerId) {
       const estimateCustomerId = results[0].customer_id;
@@ -1577,8 +1372,6 @@ router.get("/get-invoice/:estimate_number", async (req, res) => {
       va_on: row.va_on,
       va_percent: row.va_percent,
       wastage_weight: row.wastage_weight,
-      msp_va_percent: row.msp_va_percent,
-      msp_wastage_weight: row.msp_wastage_weight,
       total_weight_av: row.total_weight_av,
       mc_on: row.mc_on,
       mc_per_gram: row.mc_per_gram,
@@ -1595,8 +1388,7 @@ router.get("/get-invoice/:estimate_number", async (req, res) => {
       hm_charges: row.hm_charges,
       original_total_price: row.original_total_price,
       opentag_id: row.opentag_id,
-      qty: row.qty,
-      mc_per_gram: row.mc_per_gram
+      qty: row.qty
     }));
 
     res.json({ uniqueData, repeatedData });
