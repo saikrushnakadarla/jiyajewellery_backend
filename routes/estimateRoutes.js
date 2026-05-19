@@ -1420,4 +1420,271 @@ router.get("/api/all-packets", async (req, res) => {
   }
 });
 
+
+
+// Add these endpoints to your existing backend routes file
+
+// Update estimate status (with automatic order number generation when status becomes Ordered)
+router.put("/update-estimate-status/:estimate_number", async (req, res) => {
+  try {
+    const estimateNumber = req.params.estimate_number;
+    const { estimate_status } = req.body;
+    
+    if (!estimateNumber) {
+      return res.status(400).json({ success: false, message: "Estimate number is required" });
+    }
+    
+    if (!estimate_status) {
+      return res.status(400).json({ success: false, message: "Status is required" });
+    }
+
+    console.log(`Updating estimate ${estimateNumber} to status: ${estimate_status}`);
+
+    // Check if estimate exists and get current status
+    const [checkResult] = await db.query(
+      "SELECT estimate_id, estimate_status, order_number FROM estimate WHERE estimate_number = ? LIMIT 1",
+      [estimateNumber]
+    );
+
+    if (checkResult.length === 0) {
+      return res.status(404).json({ success: false, message: "Estimate not found" });
+    }
+
+    const currentStatus = checkResult[0].estimate_status;
+    let orderNumber = checkResult[0].order_number;
+    let orderDate = null;
+
+    // If status is changing to Ordered and no order number exists, generate one
+    if (estimate_status === "Ordered" && !orderNumber) {
+      orderNumber = await generateOrderNumber();
+      orderDate = new Date().toISOString().split('T')[0];
+      console.log(`Generated order number for estimate ${estimateNumber}: ${orderNumber}`);
+    }
+
+    // Update the status
+    let updateSql = "UPDATE estimate SET estimate_status = ?, updated_at = NOW()";
+    const updateValues = [estimate_status];
+
+    if (orderNumber) {
+      updateSql += ", order_number = ?, order_date = ?";
+      updateValues.push(orderNumber, orderDate);
+    }
+
+    updateSql += " WHERE estimate_number = ?";
+    updateValues.push(estimateNumber);
+
+    const [result] = await db.query(updateSql, updateValues);
+
+    if (result.affectedRows === 0) {
+      return res.status(500).json({ success: false, message: "Failed to update status" });
+    }
+
+    console.log(`Successfully updated estimate ${estimateNumber} to ${estimate_status}`);
+    
+    if (orderNumber) {
+      console.log(`Order number generated: ${orderNumber}`);
+    }
+
+    res.json({ 
+      success: true, 
+      message: "Estimate status updated successfully",
+      estimate_number: estimateNumber,
+      estimate_status: estimate_status,
+      order_number: orderNumber,
+      order_date: orderDate
+    });
+
+  } catch (err) {
+    console.error("Error updating estimate status:", err);
+    res.status(500).json({ success: false, message: "Failed to update estimate status", error: err.message });
+  }
+});
+
+// Update estimate with invoice details after PDF generation
+router.post("/update-estimate-with-invoice", async (req, res) => {
+  try {
+    const { 
+      estimate_number, 
+      invoice_number, 
+      net_amount, 
+      taxable_amount, 
+      tax_amount, 
+      discount_amt 
+    } = req.body;
+    
+    if (!estimate_number) {
+      return res.status(400).json({ success: false, message: "Estimate number is required" });
+    }
+    
+    if (!invoice_number) {
+      return res.status(400).json({ success: false, message: "Invoice number is required" });
+    }
+
+    console.log(`Updating estimate ${estimate_number} with invoice ${invoice_number}`);
+
+    const query = `
+      UPDATE estimate 
+      SET invoice_number = ?,
+          net_amount = ?,
+          taxable_amount = ?,
+          tax_amount = ?,
+          discount_amt = ?,
+          pdf_generated = 1,
+          updated_at = NOW()
+      WHERE estimate_number = ?
+    `;
+    
+    const [result] = await db.query(query, [
+      invoice_number, 
+      net_amount || null, 
+      taxable_amount || null, 
+      tax_amount || null, 
+      discount_amt || null, 
+      estimate_number
+    ]);
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "Estimate not found" });
+    }
+    
+    console.log(`Successfully updated estimate ${estimate_number} with invoice ${invoice_number}`);
+    
+    res.status(200).json({ 
+      success: true, 
+      message: "Estimate updated with invoice details successfully",
+      estimate_number: estimate_number,
+      invoice_number: invoice_number
+    });
+  } catch (error) {
+    console.error("Error updating estimate with invoice:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to update estimate with invoice details", 
+      error: error.message 
+    });
+  }
+});
+
+// Get unique estimates with invoice numbers
+router.get("/get-unique-estimates", async (req, res) => {
+  try {
+    console.log("Fetching unique estimates...");
+    const sql = `
+      SELECT e1.* FROM estimate e1
+      WHERE e1.estimate_id = (
+        SELECT MAX(e2.estimate_id) 
+        FROM estimate e2
+        WHERE e1.estimate_number = e2.estimate_number
+      )
+      ORDER BY e1.estimate_id DESC
+    `;
+    const [results] = await db.query(sql);
+    console.log(`Found ${results.length} unique estimates`);
+    res.json(results);
+  } catch (err) {
+    console.error("Error fetching unique estimates:", err);
+    res.status(500).json({ message: "Error fetching data", error: err.message });
+  }
+});
+
+// Get invoice data for PDF generation (updated to include invoice_number)
+router.get("/get-invoice/:estimate_number", async (req, res) => {
+  try {
+    const estNum = req.params.estimate_number;
+    
+    if (!estNum) {
+      return res.status(400).json({ message: "Estimate number is required" });
+    }
+
+    console.log(`Fetching invoice data for: ${estNum}`);
+    
+    const [checkResult] = await db.query(
+      "SELECT pdf_generated, order_number, invoice_number FROM estimate WHERE estimate_number = ? LIMIT 1",
+      [estNum]
+    );
+
+    if (checkResult.length === 0) {
+      return res.status(404).json({ message: "Invoice not found" });
+    }
+
+    const [results] = await db.query(
+      "SELECT * FROM estimate WHERE estimate_number = ? ORDER BY estimate_id", 
+      [estNum]
+    );
+
+    if (!results.length) {
+      return res.status(404).json({ message: "No data found for given estimate number" });
+    }
+
+    // Check authorization if customer_id is provided
+    const customerId = req.query.customer_id;
+    if (customerId) {
+      const estimateCustomerId = results[0].customer_id;
+      if (estimateCustomerId && String(estimateCustomerId) !== String(customerId)) {
+        return res.status(403).json({ message: "Unauthorized access" });
+      }
+    }
+
+    const uniqueData = {
+      date: results[0].date,
+      estimate_number: results[0].estimate_number,
+      order_number: results[0].order_number,
+      order_date: results[0].order_date,
+      invoice_number: results[0].invoice_number,
+      total_amount: results[0].total_amount,
+      taxable_amount: results[0].taxable_amount,
+      tax_amount: results[0].tax_amount,
+      net_amount: results[0].net_amount,
+      disscount: results[0].disscount,
+      customer_name: results[0].customer_name,
+      mobile: results[0].customer_id,
+      pdf_generated: results[0].pdf_generated,
+      estimate_status: results[0].estimate_status
+    };
+
+    const repeatedData = results.map(row => ({
+      code: row.code,
+      product_id: row.product_id,
+      product_name: row.product_name,
+      metal_type: row.metal_type,
+      design_name: row.design_name,
+      purity: row.purity,
+      category: row.category,
+      sub_category: row.sub_category,
+      gross_weight: row.gross_weight,
+      stone_weight: row.stone_weight,
+      stone_price: row.stone_price,
+      weight_bw: row.weight_bw,
+      va_on: row.va_on,
+      va_percent: row.va_percent,
+      wastage_weight: row.wastage_weight,
+      total_weight_av: row.total_weight_av,
+      mc_on: row.mc_on,
+      mc_per_gram: row.mc_per_gram,
+      making_charges: row.making_charges,
+      rate: row.rate,
+      rate_amt: row.rate_amt,
+      tax_percent: row.tax_percent,
+      tax_amt: row.tax_amt,
+      total_price: row.total_price,
+      pricing: row.pricing,
+      pieace_cost: row.pieace_cost,
+      disscount_percentage: row.disscount_percentage,
+      disscount: row.disscount,
+      hm_charges: row.hm_charges,
+      original_total_price: row.original_total_price,
+      opentag_id: row.opentag_id,
+      qty: row.qty,
+      hm_charges: row.hm_charges
+    }));
+
+    res.json({ uniqueData, repeatedData });
+  } catch (err) {
+    console.error("Error fetching invoice data:", err);
+    res.status(500).json({ message: "Error fetching invoice data", error: err.message });
+  }
+});
+
+
+
 module.exports = router;
