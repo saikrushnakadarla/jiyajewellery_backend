@@ -1687,4 +1687,120 @@ router.get("/get-invoice/:estimate_number", async (req, res) => {
 
 
 
+
+// Add this endpoint to your estimate routes file
+
+// GET - Customer orders count (for navbar badge)
+router.get("/get/customer-orders-count/:customerId", async (req, res) => {
+  try {
+    const customerId = req.params.customerId;
+    
+    if (!customerId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Customer ID is required" 
+      });
+    }
+    
+    console.log(`Fetching orders count for customer: ${customerId}`);
+    
+    // Count orders for this customer where estimate_status is 'Ordered'
+    // and source_by is 'customer'
+    const [result] = await db.query(
+      `SELECT COUNT(DISTINCT estimate_number) as order_count 
+       FROM estimate 
+       WHERE customer_id = ? 
+       AND source_by = 'customer' 
+       AND estimate_status = 'Ordered'`,
+      [customerId]
+    );
+    
+    const orderCount = result[0]?.order_count || 0;
+    
+    console.log(`Found ${orderCount} orders for customer ${customerId}`);
+    
+    res.json({ 
+      success: true, 
+      count: orderCount,
+      message: "Orders count fetched successfully"
+    });
+    
+  } catch (err) {
+    console.error("Error fetching customer orders count:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch orders count", 
+      error: err.message 
+    });
+  }
+});
+
+
+
+// GET - Customer orders (for orders page)
+router.get("/get/customer-orders/:customerId", async (req, res) => {
+  try {
+    const customerId = req.params.customerId;
+    
+    if (!customerId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Customer ID is required" 
+      });
+    }
+    
+    console.log(`Fetching orders for customer: ${customerId}`);
+    
+    // Get unique orders for this customer
+    const [orders] = await db.query(
+      `SELECT DISTINCT 
+        estimate_number,
+        order_number,
+        order_date,
+        estimate_status,
+        net_amount,
+        total_price,
+        created_at,
+        updated_at
+      FROM estimate 
+      WHERE customer_id = ? 
+      AND source_by = 'customer' 
+      AND estimate_status = 'Ordered'
+      ORDER BY order_date DESC, created_at DESC`,
+      [customerId]
+    );
+    
+    // For each order, get item count
+    for (let order of orders) {
+      const [items] = await db.query(
+        `SELECT COUNT(*) as item_count, GROUP_CONCAT(product_name) as product_names
+         FROM estimate 
+         WHERE estimate_number = ?`,
+        [order.estimate_number]
+      );
+      order.item_count = items[0]?.item_count || 0;
+      order.product_name = items[0]?.product_names?.split(',')[0] || 'Unknown';
+    }
+    
+    console.log(`Found ${orders.length} orders for customer ${customerId}`);
+    
+    res.json({ 
+      success: true, 
+      orders: orders,
+      count: orders.length,
+      message: "Orders fetched successfully"
+    });
+    
+  } catch (err) {
+    console.error("Error fetching customer orders:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch orders", 
+      error: err.message 
+    });
+  }
+});
+
+
+
 module.exports = router;
