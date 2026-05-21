@@ -173,6 +173,8 @@ const loanAmountRoutes = require('./routes/loanAmountRoutes');
 const leaveManagementRoutes = require('./routes/leavemanagementRoutes');
 const visitLogsScheduleRoutes = require('./routes/visitLogSchedule');
 const qrPacketsRoutes = require('./routes/qrpacketcodeRoutes');
+const screenshotProtectionRoutes = require('./routes/screenshotProtectionRoutes');
+
 
 
 
@@ -198,6 +200,9 @@ app.use('/', leaveManagementRoutes);
 app.use('/api/visit-logs-schedule', visitLogsScheduleRoutes);
 
 app.use('/', qrPacketsRoutes);
+
+
+app.use( "/", screenshotProtectionRoutes);
 
 // Default route
 app.get('/', (req, res) => {
