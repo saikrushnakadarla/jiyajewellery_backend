@@ -201,7 +201,7 @@ router.get('/api/users', async (req, res) => {
     const [results] = await db.query(`
       SELECT id, full_name, email_id, phone, date_of_birth, gender, designation, 
              date_of_anniversary, country, state, city, district,
-             company_name, role, status, email_verified, pincode, face_photo_path, 
+             company_name, role, status, account_status, email_verified, pincode, face_photo_path, 
              profile_photo_path, latitude, longitude, customer_id
       FROM users
     `);
