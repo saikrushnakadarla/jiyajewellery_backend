@@ -106,14 +106,15 @@ router.post('/post/product', (req, res) => {
     const images = req.files ? req.files.map(file => file.filename) : [];
 
     // Set source - if not provided, default to 'Order Management'
-    // When called from ERP, source will be 'Order Management' (for Jewellery App)
-    // When called from Product Form, source will be 'Order Management' as well
     const source = data.source || 'Order Management';
+    
+    // Set status - default to 'Available' for new products
+    const status = 'Available';
 
     // NOTE: Barcode is optional now - can be empty string or null
     const barcode = data.barcode && data.barcode.trim() !== '' ? data.barcode : null;
 
-    // COUNT THE NUMBER OF FIELDS - 33 fields total
+    // VALUES array with status (34th value)
     const values = [
       data.category_id,
       data.product_name,
@@ -147,10 +148,11 @@ router.post('/post/product', (req, res) => {
       sanitizeNumber(data.disscount),
       sanitizeNumber(data.qty, 1),
       JSON.stringify(images),
-      source  // 33rd value
+      source,
+      status  // Add status field
     ];
 
-    // SQL with 33 placeholders (?, ? ... 33 times)
+    // SQL with 34 placeholders
     const sql = `
       INSERT INTO product (
         category_id, product_name, barcode,
@@ -162,8 +164,8 @@ router.post('/post/product', (req, res) => {
         total_weight_av, mc_on, mc_per_gram, making_charges,
         rate, rate_amt, hm_charges, tax_percent, tax_amt,
         total_price, pieace_cost, disscount_percentage, disscount, qty,
-        images, source
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        images, source, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     try {
@@ -172,7 +174,8 @@ router.post('/post/product', (req, res) => {
         message: 'Product created successfully',
         product_id: result.insertId,
         images: images,
-        source: source
+        source: source,
+        status: status
       });
     } catch (err) {
       if (req.files) {
@@ -193,7 +196,8 @@ router.get('/get/products', async (req, res) => {
     const products = rows.map(product => ({
       ...product,
       images: product.images ? JSON.parse(product.images) : [],
-      source: product.source || 'Order Management'
+      source: product.source || 'Order Management',
+      status: product.status || 'Available'
     }));
     res.status(200).json(products);
   } catch (err) {
@@ -201,6 +205,7 @@ router.get('/get/products', async (req, res) => {
     res.status(500).json({ message: 'Database error' });
   }
 });
+
 
 // GET - Get single product by ID
 router.get('/get/product/:product_id', async (req, res) => {
@@ -218,6 +223,7 @@ router.get('/get/product/:product_id', async (req, res) => {
 
     product.images = product.images ? JSON.parse(product.images) : [];
     product.source = product.source || 'Order Management';
+    product.status = product.status || 'Available';
     
     res.status(200).json(product);
   } catch (err) {
@@ -432,6 +438,58 @@ router.get('/get/products/by-source/:source', async (req, res) => {
     res.status(500).json({ message: 'Database error' });
   }
 });
+
+
+// Add API endpoint to update product status
+router.put('/update/product-status/:product_id', async (req, res) => {
+  const { product_id } = req.params;
+  const { status } = req.body;
+
+  if (!status || !['Available', 'Selected', 'Ordered'].includes(status)) {
+    return res.status(400).json({ message: 'Invalid status value' });
+  }
+
+  try {
+    const [result] = await db.query(
+      `UPDATE product SET status = ? WHERE product_id = ?`,
+      [status, product_id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+
+    res.status(200).json({ 
+      message: 'Product status updated successfully',
+      status: status
+    });
+  } catch (err) {
+    console.error('Error updating product status:', err);
+    res.status(500).json({ message: 'Database error', error: err.message });
+  }
+});
+
+// Add API endpoint to get available products (for estimates)
+router.get('/get/products/available', async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT * FROM product WHERE status = 'Available' ORDER BY product_id DESC`
+    );
+    const products = rows.map(product => ({
+      ...product,
+      images: product.images ? JSON.parse(product.images) : [],
+      source: product.source || 'Order Management',
+      status: product.status || 'Available'
+    }));
+    res.status(200).json(products);
+  } catch (err) {
+    console.error('Error fetching available products:', err);
+    res.status(500).json({ message: 'Database error' });
+  }
+});
+
+
+
 
 router.use('/uploads', express.static('uploads'));
 
