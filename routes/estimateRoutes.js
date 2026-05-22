@@ -1802,5 +1802,93 @@ router.get("/get/customer-orders/:customerId", async (req, res) => {
 });
 
 
+// Add this endpoint to update product status when added to estimate
+router.post("/update-product-status-on-estimate", async (req, res) => {
+  try {
+    const { product_id, status } = req.body;
+    
+    if (!product_id) {
+      return res.status(400).json({ success: false, message: "Product ID is required" });
+    }
+    
+    if (!status || !['Selected', 'Available', 'Ordered'].includes(status)) {
+      return res.status(400).json({ success: false, message: "Valid status is required" });
+    }
+    
+    console.log(`Updating product ${product_id} status to: ${status}`);
+    
+    const [result] = await db.query(
+      "UPDATE product SET status = ? WHERE product_id = ?",
+      [status, product_id]
+    );
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "Product not found" });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: "Product status updated successfully",
+      product_id: product_id,
+      status: status
+    });
+    
+  } catch (err) {
+    console.error("Error updating product status:", err);
+    res.status(500).json({ success: false, message: "Failed to update product status", error: err.message });
+  }
+});
+
+
+// Add this endpoint to update product status to Ordered when estimate status changes
+router.post("/update-products-status-to-ordered/:estimate_number", async (req, res) => {
+  try {
+    const estimateNumber = req.params.estimate_number;
+    
+    if (!estimateNumber) {
+      return res.status(400).json({ success: false, message: "Estimate number is required" });
+    }
+
+    console.log(`Updating product status to Ordered for estimate: ${estimateNumber}`);
+
+    // Get all product_ids from this estimate
+    const [estimateProducts] = await db.query(
+      "SELECT DISTINCT product_id FROM estimate WHERE estimate_number = ?",
+      [estimateNumber]
+    );
+
+    if (estimateProducts.length === 0) {
+      return res.status(404).json({ success: false, message: "No products found for this estimate" });
+    }
+
+    // Update each product status to "Ordered"
+    let updatedCount = 0;
+    for (const product of estimateProducts) {
+      if (product.product_id) {
+        const [result] = await db.query(
+          "UPDATE product SET status = 'Ordered' WHERE product_id = ?",
+          [product.product_id]
+        );
+        if (result.affectedRows > 0) {
+          updatedCount++;
+          console.log(`Updated product ${product.product_id} status to Ordered`);
+        }
+      }
+    }
+
+    console.log(`Updated ${updatedCount} products status to Ordered for estimate ${estimateNumber}`);
+
+    res.json({ 
+      success: true, 
+      message: `Updated ${updatedCount} products status to Ordered successfully`,
+      updated_count: updatedCount
+    });
+
+  } catch (err) {
+    console.error("Error updating products status to Ordered:", err);
+    res.status(500).json({ success: false, message: "Failed to update products status", error: err.message });
+  }
+});
+
 
 module.exports = router;
