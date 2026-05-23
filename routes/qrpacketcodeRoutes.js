@@ -354,8 +354,74 @@ router.get("/api/qr-packets/next-number/:prefix", async (req, res) => {
   }
 });
 
+
+
+router.put("/api/qr-packets/update-status/:packetId", async (req, res) => {
+  try {
+    const { packetId } = req.params;
+    const { status } = req.body;
+    
+    if (!packetId) {
+      return res.status(400).json({ success: false, message: "Packet ID is required" });
+    }
+    
+    if (!status || !['Active', 'Used', 'Inactive'].includes(status)) {
+      return res.status(400).json({ success: false, message: "Valid status is required" });
+    }
+    
+    console.log(`Updating packet ${packetId} status to: ${status}`);
+    
+    const [result] = await db.query(
+      "UPDATE qr_packets SET status = ?, updated_at = NOW() WHERE id = ?",
+      [status, packetId]
+    );
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "Packet not found" });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: "Packet status updated successfully",
+      packet_id: packetId,
+      status: status
+    });
+    
+  } catch (err) {
+    console.error("Error updating packet status:", err);
+    res.status(500).json({ success: false, message: "Failed to update packet status", error: err.message });
+  }
+});
+
+// Get available packets (status = 'Active') - similar to available products
+router.get("/api/qr-packets/available", async (req, res) => {
+  try {
+    const [results] = await db.query(
+      "SELECT * FROM qr_packets WHERE status = 'Active' ORDER BY created_at DESC"
+    );
+    
+    res.json({ 
+      success: true, 
+      data: results,
+      count: results.length,
+      message: "Available packets fetched successfully" 
+    });
+  } catch (err) {
+    console.error("Error fetching available packets:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch available packets", 
+      error: err.message 
+    });
+  }
+});
+
+
+
 // ==================== NEW: Get packet details by QR data (for scanning) ====================
 // In your qr-packets route, search endpoint:
+
+
 router.get("/api/qr-packets/search/:qrData", async (req, res) => {
   try {
     const { qrData } = req.params;
@@ -366,40 +432,38 @@ router.get("/api/qr-packets/search/:qrData", async (req, res) => {
       searchTerm = parsedData.qr_code || parsedData.prefix || qrData;
     } catch (e) { /* not JSON, use as-is */ }
 
+    // Modified: Only fetch packets with status = 'Active'
     const [results] = await db.query(
       `SELECT * FROM qr_packets 
-       WHERE CONCAT(prefix, qr_number) = ?
-          OR prefix = ?
+       WHERE (CONCAT(prefix, qr_number) = ? OR prefix = ?)
+       AND status = 'Active'
        ORDER BY created_at DESC LIMIT 1`,
       [searchTerm, searchTerm]
     );
 
     if (results.length === 0) {
-      return res.json({ success: false, data: null, message: "No packet found" });
+      return res.json({ success: false, data: null, message: "No available packet found. Packet may already be used." });
     }
 
     const row = results[0];
 
-    // FIX: qr_code column stores JSON — parse it to get the actual code string
-    let actualQrCode = `${row.prefix}${row.qr_number}`; // reliable fallback
+    let actualQrCode = `${row.prefix}${row.qr_number}`;
     try {
       const parsed = JSON.parse(row.qr_code);
       if (parsed.qr_code && typeof parsed.qr_code === 'string') {
         actualQrCode = parsed.qr_code;
       }
     } catch (e) {
-      // qr_code column is already a plain string
       if (row.qr_code && typeof row.qr_code === 'string' && !row.qr_code.startsWith('{')) {
         actualQrCode = row.qr_code;
       }
     }
 
-    // Return a clean packet object with qr_code as a plain string
     return res.json({
       success: true,
       data: {
         ...row,
-        qr_code: actualQrCode  // Always a plain string like "PKT0003"
+        qr_code: actualQrCode
       },
       message: "Packet details fetched successfully"
     });
