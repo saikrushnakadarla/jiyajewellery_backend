@@ -174,6 +174,7 @@ const leaveManagementRoutes = require('./routes/leavemanagementRoutes');
 const visitLogsScheduleRoutes = require('./routes/visitLogSchedule');
 const qrPacketsRoutes = require('./routes/qrpacketcodeRoutes');
 const screenshotProtectionRoutes = require('./routes/screenshotProtectionRoutes');
+const orderCartRoutes = require('./routes/orderCartRoutes');
 
 
 
@@ -200,6 +201,10 @@ app.use('/', leaveManagementRoutes);
 app.use('/api/visit-logs-schedule', visitLogsScheduleRoutes);
 
 app.use('/', qrPacketsRoutes);
+
+
+// Add this line with your other route registrations
+app.use('/api/order-cart', orderCartRoutes);
 
 
 app.use( "/", screenshotProtectionRoutes);
