@@ -1891,4 +1891,50 @@ router.post("/update-products-status-to-ordered/:estimate_number", async (req, r
 });
 
 
+
+// Get products for a specific estimate/order
+router.get('/get/estimate-products/:estimateNumber', async (req, res) => {
+    try {
+        const { estimateNumber } = req.params;
+        
+        const [products] = await db.query(`
+            SELECT 
+                ep.*,
+                p.images,
+                p.barcode,
+                p.gross_wt,
+                p.net_wt,
+                p.stone_wt,
+                p.metal_type,
+                p.purity,
+                p.design
+            FROM estimate_products ep
+            LEFT JOIN product p ON ep.product_id = p.product_id
+            WHERE ep.estimate_id = (
+                SELECT estimate_id FROM estimates WHERE estimate_number = ?
+            )
+        `, [estimateNumber]);
+        
+        // Parse images JSON for each product
+        const formattedProducts = products.map(product => ({
+            ...product,
+            images: product.images ? JSON.parse(product.images) : []
+        }));
+        
+        res.json({
+            success: true,
+            products: formattedProducts,
+            count: products.length
+        });
+    } catch (error) {
+        console.error('Error fetching estimate products:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+});
+
+
 module.exports = router;
