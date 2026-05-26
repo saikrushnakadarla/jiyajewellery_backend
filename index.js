@@ -42,7 +42,7 @@ app.get('/api/admin-notifications', (req, res) => {
   const heartbeat = setInterval(() => {
     if (res.writableEnded) {
       clearInterval(heartbeat);
-      return;
+      return; 
     }
     res.write(`: heartbeat\n\n`);
   }, 30000);
