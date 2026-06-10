@@ -156,26 +156,30 @@ const sendStatusEmail = async (email, full_name, status, credentials = null) => 
   if (status === 'approved') {
     subject = 'Your Account Has Been Approved';
     html = `
-      <h2>Account Approval Notification</h2>
-      <p>Dear ${full_name},</p>
-      <p>We are pleased to inform you that your account has been approved by our administration team.</p>
-      <p>You can now access your account using the following credentials:</p>
-      <p><strong>Email:</strong> ${email}</p>
-      <p><strong>Password:</strong> ${credentials.password}</p>
-      <p>Please log in and change your password after your first login for security reasons.</p>
-      <p><strong>Note:</strong> Upon your first login, you will be required to verify your email address.</p>
-      <br>
-      <p>Thank you,<br>Administration Team</p>
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333; text-align: center;">Account Approval Notification</h2>
+        <p>Dear ${full_name},</p>
+        <p>We are pleased to inform you that your account has been approved by our administration team.</p>
+        <p>You can now access your account using the following credentials:</p>
+        <p><strong>Email:</strong> ${email}</p>
+        <p><strong>Password:</strong> ${credentials.password}</p>
+        <p>Please log in and change your password after your first login for security reasons.</p>
+        <p><strong>Note:</strong> Upon your first login, you will be required to verify your email address.</p>
+        <br>
+        <p>Thank you,<br>Administration Team</p>
+      </div>
     `;
   } else if (status === 'rejected') {
     subject = 'Your Account Application Status';
     html = `
-      <h2>Account Application Notification</h2>
-      <p>Dear ${full_name},</p>
-      <p>We regret to inform you that your account application has not been approved at this time.</p>
-      <p>If you believe this is an error or would like more information, please contact our support team.</p>
-      <br>
-      <p>Thank you,<br>Administration Team</p>
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333; text-align: center;">Account Application Notification</h2>
+        <p>Dear ${full_name},</p>
+        <p>We regret to inform you that your account application has not been approved at this time.</p>
+        <p>If you believe this is an error or would like more information, please contact our support team.</p>
+        <br>
+        <p>Thank you,<br>Administration Team</p>
+      </div>
     `;
   } else {
     return;
@@ -201,8 +205,9 @@ router.get('/api/users', async (req, res) => {
     const [results] = await db.query(`
       SELECT id, full_name, email_id, phone, date_of_birth, gender, designation, 
              date_of_anniversary, country, state, city, district,
-             company_name, role, status, account_status, email_verified, pincode, face_photo_path, 
-             profile_photo_path, latitude, longitude, customer_id
+             company_name, role, status, account_status, email_verified, pincode, 
+             face_photo_path, profile_photo_path, latitude, longitude, customer_id,
+             duty_start_time, duty_end_time
       FROM users
     `);
     res.json(results);
@@ -220,7 +225,8 @@ router.get('/api/users/:id', async (req, res) => {
       SELECT id, full_name, email_id, phone, date_of_birth, gender, designation, 
              date_of_anniversary, country, state, city, district,
              company_name, role, status, email_verified, pincode, face_photo_path, 
-             profile_photo_path, latitude, longitude, customer_id
+             profile_photo_path, latitude, longitude, customer_id,
+             duty_start_time, duty_end_time
       FROM users WHERE id = ?
     `, [id]);
 
@@ -260,7 +266,9 @@ router.post('/api/users',
       pincode,
       face_descriptor,
       latitude,
-      longitude
+      longitude,
+      duty_start_time,
+      duty_end_time
     } = req.body;
 
     if (!email_id || !password) {
@@ -302,8 +310,9 @@ router.post('/api/users',
         full_name, email_id, phone, date_of_birth, gender, designation,
         date_of_anniversary, country, state, city, district,
         password, confirm_password, company_name, role, status, email_verified, pincode,
-        face_descriptor, face_photo_path, profile_photo_path, latitude, longitude, customer_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        face_descriptor, face_photo_path, profile_photo_path, latitude, longitude, customer_id,
+        duty_start_time, duty_end_time
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const [result] = await db.query(insertQuery, [
@@ -330,7 +339,9 @@ router.post('/api/users',
       profilePhotoPath,
       latitude || null,
       longitude || null,
-      customerId
+      customerId,
+      duty_start_time || null,
+      duty_end_time || null
     ]);
 
     res.status(201).json({
@@ -378,7 +389,9 @@ router.put('/api/users/:id',
       pincode,
       face_descriptor,
       latitude,
-      longitude
+      longitude,
+      duty_start_time,
+      duty_end_time
     } = req.body;
 
     if (password || confirm_password) {
@@ -425,6 +438,8 @@ router.put('/api/users/:id',
     if (face_descriptor !== undefined) { updates.push('face_descriptor = ?'); params.push(face_descriptor); }
     if (latitude !== undefined) { updates.push('latitude = ?'); params.push(latitude); }
     if (longitude !== undefined) { updates.push('longitude = ?'); params.push(longitude); }
+    if (duty_start_time !== undefined) { updates.push('duty_start_time = ?'); params.push(duty_start_time); }
+    if (duty_end_time !== undefined) { updates.push('duty_end_time = ?'); params.push(duty_end_time); }
     
     if (req.files && req.files.face_photo && req.files.face_photo.length > 0) {
       if (currentUser[0]?.face_photo_path) {
@@ -688,6 +703,7 @@ router.post('/api/users/login', async (req, res) => {
   }
 });
 
+/* FACE LOGIN */
 router.post('/api/users/face-login', async (req, res) => {
   try {
     const { face_descriptor } = req.body;
@@ -788,6 +804,44 @@ router.get('/api/users/profile-photo/:filename', (req, res) => {
     res.sendFile(filePath);
   } else {
     res.status(404).json({ message: 'Photo not found' });
+  }
+});
+
+
+/* CHECK DUTY HOURS FOR SALESMAN BY USER ID */
+router.get('/api/users/check-duty-hours/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID is required' });
+    }
+    
+    const [users] = await db.query(
+      'SELECT id, role, duty_start_time, duty_end_time, status, account_status, full_name, email_id FROM users WHERE id = ?',
+      [userId]
+    );
+    
+    if (users.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    const user = users[0];
+    
+    res.json({
+      id: user.id,
+      role: user.role,
+      duty_start_time: user.duty_start_time,
+      duty_end_time: user.duty_end_time,
+      status: user.status,
+      account_status: user.account_status,
+      full_name: user.full_name,
+      email_id: user.email_id
+    });
+    
+  } catch (err) {
+    console.error('GET /api/users/check-duty-hours/:userId error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
