@@ -1,14 +1,23 @@
+// qrpacketcodeRoutes.js - Updated with source field
+
 const express = require("express");
 const db = require("../db");
 const router = express.Router();
 
 // Helper function to generate next QR number for a prefix
-async function getNextQRNumber(prefix) {
+async function getNextQRNumber(prefix, source = null) {
   try {
-    const [results] = await db.query(
-      "SELECT qr_number FROM qr_packets WHERE prefix = ? ORDER BY CAST(qr_number AS UNSIGNED) DESC LIMIT 1",
-      [prefix]
-    );
+    let query = "SELECT qr_number FROM qr_packets WHERE prefix = ?";
+    let params = [prefix];
+    
+    if (source) {
+      query += " AND source = ?";
+      params.push(source);
+    }
+    
+    query += " ORDER BY CAST(qr_number AS UNSIGNED) DESC LIMIT 1";
+    
+    const [results] = await db.query(query, params);
     
     if (results.length === 0) {
       return "0001";
@@ -24,13 +33,18 @@ async function getNextQRNumber(prefix) {
   }
 }
 
-// Helper function to validate if QR number already exists for a prefix
-async function isQRNumberExists(prefix, qrNumber) {
+// Helper function to validate if QR number already exists for a prefix and source
+async function isQRNumberExists(prefix, qrNumber, source = null) {
   try {
-    const [results] = await db.query(
-      "SELECT id FROM qr_packets WHERE prefix = ? AND qr_number = ?",
-      [prefix, qrNumber]
-    );
+    let query = "SELECT id FROM qr_packets WHERE prefix = ? AND qr_number = ?";
+    let params = [prefix, qrNumber];
+    
+    if (source) {
+      query += " AND source = ?";
+      params.push(source);
+    }
+    
+    const [results] = await db.query(query, params);
     return results.length > 0;
   } catch (error) {
     console.error("Error checking QR number existence:", error);
@@ -38,14 +52,21 @@ async function isQRNumberExists(prefix, qrNumber) {
   }
 }
 
-// ==================== EXISTING ROUTES ====================
+// ==================== EXISTING ROUTES (Updated) ====================
 
 // Get all QR packet records
 router.get("/api/qr-packets", async (req, res) => {
   try {
-    const [results] = await db.query(
-      "SELECT * FROM qr_packets ORDER BY created_at DESC"
-    );
+    const { source } = req.query;
+    let query = "SELECT * FROM qr_packets ORDER BY created_at DESC";
+    let params = [];
+    
+    if (source) {
+      query = "SELECT * FROM qr_packets WHERE source = ? ORDER BY created_at DESC";
+      params = [source];
+    }
+    
+    const [results] = await db.query(query, params);
     
     res.json({ 
       success: true, 
@@ -65,7 +86,7 @@ router.get("/api/qr-packets", async (req, res) => {
 // Add new QR packet record(s) with quantity support
 router.post("/api/qr-packets", async (req, res) => {
   try {
-    const { prefix, qr_number, qr_code, packet_date, packet_wt, status, quantity } = req.body;
+    const { prefix, qr_number, qr_code, packet_date, packet_wt, status, quantity, source } = req.body;
     
     if (!prefix || !packet_date) {
       return res.status(400).json({ 
@@ -74,6 +95,9 @@ router.post("/api/qr-packets", async (req, res) => {
       });
     }
 
+    // Set source (default to 'OrderManagement' if not provided)
+    const recordSource = source || 'OrderManagement';
+    
     // Get quantity (default to 1 if not provided)
     const qty = parseInt(quantity) || 1;
     
@@ -87,7 +111,7 @@ router.post("/api/qr-packets", async (req, res) => {
     // Get the starting QR number
     let startNumber = qr_number;
     if (!startNumber) {
-      startNumber = await getNextQRNumber(prefix);
+      startNumber = await getNextQRNumber(prefix, recordSource);
     }
 
     const insertedRecords = [];
@@ -98,13 +122,12 @@ router.post("/api/qr-packets", async (req, res) => {
     for (let i = 0; i < qty; i++) {
       const formattedNumber = currentNumber.toString().padStart(4, '0');
       
-      // Check if this QR number already exists for this prefix
-      const exists = await isQRNumberExists(prefix, formattedNumber);
+      // Check if this QR number already exists for this prefix and source
+      const exists = await isQRNumberExists(prefix, formattedNumber, recordSource);
       
       if (exists) {
         skippedRecords.push(`${prefix}${formattedNumber}`);
         currentNumber++;
-        // Get next available number
         continue;
       }
 
@@ -115,20 +138,22 @@ router.post("/api/qr-packets", async (req, res) => {
         qr_number: formattedNumber,
         packet_date: packet_date,
         packet_wt: packet_wt ? parseFloat(packet_wt) : null,
+        source: recordSource,
         timestamp: Date.now()
       });
 
       // Insert record
       const [result] = await db.query(
-        `INSERT INTO qr_packets (prefix, qr_number, qr_code, packet_date, packet_wt, status) 
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO qr_packets (prefix, qr_number, qr_code, packet_date, packet_wt, status, source) 
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
           prefix, 
           formattedNumber,
           qrData, 
           packet_date, 
           packet_wt ? parseFloat(packet_wt) : null, 
-          status || 'Active'
+          status || 'Active',
+          recordSource
         ]
       );
 
@@ -145,7 +170,7 @@ router.post("/api/qr-packets", async (req, res) => {
     // Build response message
     let message = '';
     if (insertedRecords.length > 0 && skippedRecords.length === 0) {
-      message = `Successfully generated ${insertedRecords.length} QR code(s) starting from ${prefix}${startNumber}`;
+      message = `Successfully generated ${insertedRecords.length} QR code(s) from ${recordSource}`;
     } else if (insertedRecords.length > 0 && skippedRecords.length > 0) {
       message = `Generated ${insertedRecords.length} QR code(s). Skipped ${skippedRecords.length} existing: ${skippedRecords.join(', ')}`;
     } else if (insertedRecords.length === 0) {
@@ -161,7 +186,8 @@ router.post("/api/qr-packets", async (req, res) => {
         total_inserted: insertedRecords.length,
         total_skipped: skippedRecords.length,
         starting_number: `${prefix}${startNumber}`,
-        quantity: qty
+        quantity: qty,
+        source: recordSource
       }
     });
   } catch (err) {
@@ -178,7 +204,7 @@ router.post("/api/qr-packets", async (req, res) => {
 router.put("/api/qr-packets/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { prefix, qr_number, qr_code, packet_date, packet_wt, status } = req.body;
+    const { prefix, qr_number, qr_code, packet_date, packet_wt, status, source } = req.body;
     
     if (!prefix || !packet_date) {
       return res.status(400).json({ 
@@ -187,21 +213,24 @@ router.put("/api/qr-packets/:id", async (req, res) => {
       });
     }
 
+    // Get current record to preserve source if not provided
+    const [currentRecord] = await db.query(
+      "SELECT source, prefix FROM qr_packets WHERE id = ?",
+      [id]
+    );
+    
+    if (currentRecord.length === 0) {
+      return res.status(404).json({ success: false, message: "Packet record not found" });
+    }
+    
+    const recordSource = source || currentRecord[0].source;
+
     let finalQRNumber = qr_number;
     if (!finalQRNumber) {
-      const [currentRecord] = await db.query(
-        "SELECT prefix FROM qr_packets WHERE id = ?",
-        [id]
-      );
-      
-      if (currentRecord.length > 0 && currentRecord[0].prefix !== prefix) {
-        finalQRNumber = await getNextQRNumber(prefix);
-      } else if (currentRecord.length > 0) {
-        const [existing] = await db.query(
-          "SELECT qr_number FROM qr_packets WHERE id = ?",
-          [id]
-        );
-        finalQRNumber = existing[0]?.qr_number || "0001";
+      if (currentRecord[0].prefix !== prefix) {
+        finalQRNumber = await getNextQRNumber(prefix, recordSource);
+      } else {
+        finalQRNumber = qr_number || (await getNextQRNumber(prefix, recordSource));
       }
     }
 
@@ -212,12 +241,13 @@ router.put("/api/qr-packets/:id", async (req, res) => {
       qr_number: finalQRNumber,
       packet_date: packet_date,
       packet_wt: packet_wt ? parseFloat(packet_wt) : null,
+      source: recordSource,
       timestamp: Date.now()
     });
 
     const [result] = await db.query(
       `UPDATE qr_packets 
-       SET prefix = ?, qr_number = ?, qr_code = ?, packet_date = ?, packet_wt = ?, status = ?, updated_at = NOW()
+       SET prefix = ?, qr_number = ?, qr_code = ?, packet_date = ?, packet_wt = ?, status = ?, source = ?, updated_at = NOW()
        WHERE id = ?`,
       [
         prefix, 
@@ -226,6 +256,7 @@ router.put("/api/qr-packets/:id", async (req, res) => {
         packet_date, 
         packet_wt ? parseFloat(packet_wt) : null, 
         status || 'Active',
+        recordSource,
         id
       ]
     );
@@ -312,11 +343,19 @@ router.get("/api/qr-packets/:id", async (req, res) => {
 router.get("/api/qr-packets/prefix/:prefix", async (req, res) => {
   try {
     const { prefix } = req.params;
+    const { source } = req.query;
     
-    const [results] = await db.query(
-      "SELECT * FROM qr_packets WHERE prefix = ? ORDER BY created_at DESC",
-      [prefix]
-    );
+    let query = "SELECT * FROM qr_packets WHERE prefix = ?";
+    let params = [prefix];
+    
+    if (source) {
+      query += " AND source = ?";
+      params.push(source);
+    }
+    
+    query += " ORDER BY created_at DESC";
+    
+    const [results] = await db.query(query, params);
     
     res.json({ 
       success: true, 
@@ -337,7 +376,8 @@ router.get("/api/qr-packets/prefix/:prefix", async (req, res) => {
 router.get("/api/qr-packets/next-number/:prefix", async (req, res) => {
   try {
     const { prefix } = req.params;
-    const nextNumber = await getNextQRNumber(prefix);
+    const { source } = req.query;
+    const nextNumber = await getNextQRNumber(prefix, source);
     
     res.json({ 
       success: true, 
@@ -354,8 +394,7 @@ router.get("/api/qr-packets/next-number/:prefix", async (req, res) => {
   }
 });
 
-
-
+// Update packet status
 router.put("/api/qr-packets/update-status/:packetId", async (req, res) => {
   try {
     const { packetId } = req.params;
@@ -368,8 +407,6 @@ router.put("/api/qr-packets/update-status/:packetId", async (req, res) => {
     if (!status || !['Active', 'Used', 'Inactive'].includes(status)) {
       return res.status(400).json({ success: false, message: "Valid status is required" });
     }
-    
-    console.log(`Updating packet ${packetId} status to: ${status}`);
     
     const [result] = await db.query(
       "UPDATE qr_packets SET status = ?, updated_at = NOW() WHERE id = ?",
@@ -393,12 +430,21 @@ router.put("/api/qr-packets/update-status/:packetId", async (req, res) => {
   }
 });
 
-// Get available packets (status = 'Active') - similar to available products
+// Get available packets (status = 'Active')
 router.get("/api/qr-packets/available", async (req, res) => {
   try {
-    const [results] = await db.query(
-      "SELECT * FROM qr_packets WHERE status = 'Active' ORDER BY created_at DESC"
-    );
+    const { source } = req.query;
+    let query = "SELECT * FROM qr_packets WHERE status = 'Active'";
+    let params = [];
+    
+    if (source) {
+      query += " AND source = ?";
+      params.push(source);
+    }
+    
+    query += " ORDER BY created_at DESC";
+    
+    const [results] = await db.query(query, params);
     
     res.json({ 
       success: true, 
@@ -416,15 +462,11 @@ router.get("/api/qr-packets/available", async (req, res) => {
   }
 });
 
-
-
-// ==================== NEW: Get packet details by QR data (for scanning) ====================
-// In your qr-packets route, search endpoint:
-
-
+// Search packet by QR data
 router.get("/api/qr-packets/search/:qrData", async (req, res) => {
   try {
     const { qrData } = req.params;
+    const { source } = req.query;
     let searchTerm = qrData;
 
     try {
@@ -432,14 +474,19 @@ router.get("/api/qr-packets/search/:qrData", async (req, res) => {
       searchTerm = parsedData.qr_code || parsedData.prefix || qrData;
     } catch (e) { /* not JSON, use as-is */ }
 
-    // Modified: Only fetch packets with status = 'Active'
-    const [results] = await db.query(
-      `SELECT * FROM qr_packets 
-       WHERE (CONCAT(prefix, qr_number) = ? OR prefix = ?)
-       AND status = 'Active'
-       ORDER BY created_at DESC LIMIT 1`,
-      [searchTerm, searchTerm]
-    );
+    let query = `SELECT * FROM qr_packets 
+                 WHERE (CONCAT(prefix, qr_number) = ? OR prefix = ?)
+                 AND status = 'Active'`;
+    let params = [searchTerm, searchTerm];
+    
+    if (source) {
+      query += " AND source = ?";
+      params.push(source);
+    }
+    
+    query += " ORDER BY created_at DESC LIMIT 1";
+    
+    const [results] = await db.query(query, params);
 
     if (results.length === 0) {
       return res.json({ success: false, data: null, message: "No available packet found. Packet may already be used." });
@@ -471,6 +518,35 @@ router.get("/api/qr-packets/search/:qrData", async (req, res) => {
   } catch (error) {
     console.error("Error fetching packet details:", error);
     res.status(500).json({ success: false, message: "Failed to fetch packet details", error: error.message });
+  }
+});
+
+// Get statistics by source
+router.get("/api/qr-packets/stats/summary", async (req, res) => {
+  try {
+    const [results] = await db.query(
+      `SELECT 
+        source,
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'Active' THEN 1 ELSE 0 END) as active_count,
+        SUM(CASE WHEN status = 'Used' THEN 1 ELSE 0 END) as used_count,
+        COUNT(DISTINCT prefix) as unique_prefixes
+       FROM qr_packets 
+       GROUP BY source`
+    );
+    
+    res.json({ 
+      success: true, 
+      data: results,
+      message: "Statistics fetched successfully" 
+    });
+  } catch (err) {
+    console.error("Error fetching statistics:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch statistics", 
+      error: err.message 
+    });
   }
 });
 
