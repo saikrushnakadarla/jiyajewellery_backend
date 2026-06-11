@@ -517,6 +517,16 @@ router.post('/api/users/send-otp/:userId', async (req, res) => {
       return res.status(400).json({ message: 'Email already verified' });
     }
 
+    const existingOtp = otpStore.get(user.email_id);
+
+      if (existingOtp && existingOtp.expiresAt > Date.now()) {
+        return res.json({
+          success: true,
+          message: "OTP already sent",
+          email: user.email_id
+        });
+      }
+
     const otp = generateOTP();
     const expiresAt = Date.now() + 10 * 60 * 1000;
 
