@@ -175,6 +175,7 @@ const visitLogsScheduleRoutes = require('./routes/visitLogSchedule');
 const qrPacketsRoutes = require('./routes/qrpacketcodeRoutes');
 const screenshotProtectionRoutes = require('./routes/screenshotProtectionRoutes');
 const orderCartRoutes = require('./routes/orderCartRoutes');
+const passwordResetRoutes = require('./routes/passwordResetRoutes');
 
 
 
@@ -208,6 +209,8 @@ app.use('/api/order-cart', orderCartRoutes);
 
 
 app.use( "/", screenshotProtectionRoutes);
+
+app.use('/', passwordResetRoutes);
 
 // Default route
 app.get('/', (req, res) => {
