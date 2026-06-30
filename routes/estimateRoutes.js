@@ -161,6 +161,7 @@ router.post("/add/estimate", async (req, res) => {
     const customerId = data.customer_id || "";
     const customerName = data.customer_name || "";
     const sourceBy = data.source_by || "";
+    const custId = data.cust_id || "";
     
     // Generate order number when source_by is 'customer'
     let orderNumber = null;
@@ -214,7 +215,8 @@ router.post("/add/estimate", async (req, res) => {
       data.pcode || null,                           // 2
       salespersonId,                                // 3
       sourceBy,                                     // 4
-      customerId,                                   // 5
+      customerId,     
+       custId,                                // 5
       customerName,                                 // 6
       data.estimate_number,                         // 7
       orderNumber,                                  // 8
@@ -270,7 +272,7 @@ router.post("/add/estimate", async (req, res) => {
       
       const insertSql = `
         INSERT INTO estimate (
-          date, pcode, salesperson_id, source_by, customer_id, customer_name, 
+          date, pcode, salesperson_id, source_by, customer_id, cust_id, customer_name, 
           estimate_number, order_number, order_date, opentag_id, code, product_id, 
           product_name, metal_type, design_name, purity, category, sub_category, 
           gross_weight, stone_weight, stone_price, weight_bw, va_on, va_percent, 
@@ -368,7 +370,8 @@ router.post("/add/estimate", async (req, res) => {
         navigation_path: navigationPath,
         source_by: sourceBy,
         salesperson_id: salespersonId,
-        customer_id: customerId
+        customer_id: customerId,
+        cust_id: custId,
       });
     } else {
       // Regular insert - check for existing entry
@@ -385,7 +388,7 @@ router.post("/add/estimate", async (req, res) => {
         
         const updateSql = `
           UPDATE estimate SET
-            date=?, pcode=?, salesperson_id=?, source_by=?, customer_id=?, customer_name=?, 
+            date=?, pcode=?, salesperson_id=?, source_by=?, customer_id=?, cust_id=?, customer_name=?, 
             estimate_status=?, order_number=?, order_date=?, 
             opentag_id=?, code=?, product_id=?, product_name=?, metal_type=?, design_name=?, purity=?,
             category=?, sub_category=?, gross_weight=?, stone_weight=?, stone_price=?, 
@@ -413,7 +416,8 @@ router.post("/add/estimate", async (req, res) => {
           navigation_path: navigationPath,
           source_by: sourceBy,
           salesperson_id: salespersonId,
-          customer_id: customerId
+          customer_id: customerId,
+          cust_id: custId,
         });
       } else {
         // INSERT new entry
@@ -423,7 +427,7 @@ router.post("/add/estimate", async (req, res) => {
         
         const insertSql = `
           INSERT INTO estimate (
-            date, pcode, salesperson_id, source_by, customer_id, customer_name, 
+            date, pcode, salesperson_id, source_by, customer_id, cust_id, customer_name, 
             estimate_number, order_number, order_date, opentag_id, code, product_id, 
             product_name, metal_type, design_name, purity, category, sub_category, 
             gross_weight, stone_weight, stone_price, weight_bw, va_on, va_percent, 
@@ -517,7 +521,8 @@ router.post("/add/estimate", async (req, res) => {
           navigation_path: navigationPath,
           source_by: sourceBy,
           salesperson_id: salespersonId,
-          customer_id: customerId
+          customer_id: customerId,
+          cust_id: custId,
         });
       }
     }
@@ -1024,6 +1029,7 @@ router.put("/edit/estimate/:id", async (req, res) => {
       data.pcode || null, 
       data.customer_name, 
       data.customer_id, 
+      data.cust_id,
       data.salesperson_id, 
       data.source_by, 
       data.estimate_status || "Pending", 
