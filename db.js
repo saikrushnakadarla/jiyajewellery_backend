@@ -5,12 +5,10 @@ const db = mysql.createPool({
   user: "root",
   password: "",
 
-  database: "jiyajewellery",
-  port:3306 
-  // port:4306
+  database: "jiya_jewellery",
+  // port:3306 
+  port:4306
 
-
- 
 
 });
 
