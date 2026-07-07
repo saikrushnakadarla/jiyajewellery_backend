@@ -216,7 +216,7 @@ router.post("/add/estimate", async (req, res) => {
       salespersonId,                                // 3
       sourceBy,                                     // 4
       customerId,     
-       custId,                                // 5
+      custId,                                       // 5
       customerName,                                 // 6
       data.estimate_number,                         // 7
       orderNumber,                                  // 8
@@ -1232,7 +1232,9 @@ router.get("/get-estimates/:estimate_number", async (req, res) => {
       source_by: results[0].source_by,
       packet_barcode: results[0].packet_barcode,
       packet_wt: results[0].packet_wt,
-      pack_images: results[0].pack_images
+      pack_images: results[0].pack_images,
+      weight_machine_reading: results[0].weight_machine_reading,
+      weight_machine_unit: results[0].weight_machine_unit
     };
 
     const repeatedData = results.map(row => ({
@@ -1359,7 +1361,9 @@ router.get("/get-invoice/:estimate_number", async (req, res) => {
       customer_name: results[0].customer_name,
       mobile: results[0].customer_id,
       pdf_generated: results[0].pdf_generated,
-      estimate_status: results[0].estimate_status
+      estimate_status: results[0].estimate_status,
+      weight_machine_reading: results[0].weight_machine_reading,
+      weight_machine_unit: results[0].weight_machine_unit
     };
 
     const repeatedData = results.map(row => ({
@@ -1942,5 +1946,324 @@ router.get('/get/estimate-products/:estimateNumber', async (req, res) => {
     }
 });
 
+// ============================================
+// WEIGHT MACHINE ENDPOINTS (ENHANCED)
+// ============================================
+
+// Update estimate with weight machine reading - Enhanced version
+// Supports dual-weight extraction (Gross + Net/Wastage)
+// ============================================
+// WEIGHT MACHINE ENDPOINTS (ENHANCED)
+// ============================================
+
+// Update estimate with weight machine reading - Enhanced version
+// Supports dual-weight extraction (Gross + Net/Wastage)
+router.post("/update/estimate-weight", async (req, res) => {
+  try {
+    const {
+      estimate_number,
+      gross_weight,
+      wastage_weight,
+      net_weight,
+      weight_machine_reading,
+      weight_machine_unit,
+      weight_machine_raw
+    } = req.body;
+
+    if (!estimate_number) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Estimate number is required" 
+      });
+    }
+
+    // Check if at least one weight value is provided
+    if ([gross_weight, wastage_weight, net_weight, weight_machine_reading].every(v => v === undefined || v === null || v === '')) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "At least one weight value is required" 
+      });
+    }
+
+    console.log(`Updating estimate ${estimate_number} with weight data:`, {
+      gross_weight,
+      wastage_weight,
+      net_weight,
+      weight_machine_reading
+    });
+
+    // Check if estimate exists - get ALL entries for this estimate_number
+    const [checkResult] = await db.query(
+      "SELECT estimate_id, product_id, product_name FROM estimate WHERE estimate_number = ? ORDER BY estimate_id DESC",
+      [estimate_number]
+    );
+    
+    if (checkResult.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Estimate not found" 
+      });
+    }
+
+    // Get the latest entry (most recent product added)
+    const latestEntry = checkResult[0];
+    const targetId = latestEntry.estimate_id;
+    
+    console.log(`Updating latest entry for estimate ${estimate_number}:`, {
+      estimate_id: targetId,
+      product_name: latestEntry.product_name
+    });
+
+    // Build dynamic update query
+    const fields = [];
+    const values = [];
+
+    // Add weight fields if provided
+    if (gross_weight !== undefined && gross_weight !== null && gross_weight !== '') {
+      const gw = parseFloat(gross_weight);
+      if (!isNaN(gw)) {
+        fields.push("gross_weight = ?");
+        values.push(gw);
+      }
+    }
+    
+    if (wastage_weight !== undefined && wastage_weight !== null && wastage_weight !== '') {
+      const ww = parseFloat(wastage_weight);
+      if (!isNaN(ww)) {
+        fields.push("wastage_weight = ?");
+        values.push(ww);
+      }
+    }
+    
+    if (net_weight !== undefined && net_weight !== null && net_weight !== '') {
+      const nw = parseFloat(net_weight);
+      if (!isNaN(nw)) {
+        fields.push("weight_bw = ?");
+        values.push(nw);
+      }
+    }
+    
+    if (weight_machine_reading !== undefined && weight_machine_reading !== null && weight_machine_reading !== '') {
+      const wmr = parseFloat(weight_machine_reading);
+      if (!isNaN(wmr)) {
+        fields.push("weight_machine_reading = ?");
+        values.push(wmr);
+      }
+    }
+
+    // Always update these fields
+    fields.push("weight_machine_unit = ?");
+    values.push(weight_machine_unit || 'g');
+    
+    fields.push("weight_machine_raw = ?");
+    values.push(weight_machine_raw || null);
+    
+    fields.push("updated_at = NOW()");
+
+    // Add the WHERE clause value
+    values.push(targetId);
+
+    // If we have fields to update
+    if (fields.length > 0) {
+      const query = `UPDATE estimate SET ${fields.join(', ')} WHERE estimate_id = ?`;
+      
+      console.log("Update query:", query);
+      console.log("Values:", values);
+
+      const [result] = await db.query(query, values);
+
+      console.log(`✅ Updated ${result.affectedRows} row(s) with weight data for estimate ${estimate_number}`);
+    } else {
+      console.log("No fields to update");
+    }
+
+    // Get updated data
+    const [updatedData] = await db.query(
+      "SELECT * FROM estimate WHERE estimate_id = ?",
+      [targetId]
+    );
+
+    res.json({
+      success: true,
+      message: "Weight data saved successfully",
+      estimate_number: estimate_number,
+      data: updatedData[0] || null,
+      affected_rows: result?.affectedRows || 0
+    });
+
+  } catch (err) {
+    console.error("Error updating estimate weight:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to update estimate weight", 
+      error: err.message 
+    });
+  }
+});
+
+// Get weight machine reading for an estimate
+router.get("/get/estimate-weight/:estimate_number", async (req, res) => {
+  try {
+    const estimateNumber = req.params.estimate_number;
+    
+    if (!estimateNumber) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Estimate number is required" 
+      });
+    }
+    
+    console.log(`Fetching weight machine reading for estimate: ${estimateNumber}`);
+    
+    const [result] = await db.query(
+      `SELECT 
+        estimate_number,
+        weight_machine_reading,
+        weight_machine_unit,
+        weight_machine_raw,
+        created_at,
+        updated_at
+      FROM estimate 
+      WHERE estimate_number = ? 
+      LIMIT 1`,
+      [estimateNumber]
+    );
+    
+    if (result.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Estimate not found" 
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      data: result[0],
+      message: "Weight machine reading fetched successfully"
+    });
+    
+  } catch (err) {
+    console.error("Error fetching weight machine reading:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch weight machine reading", 
+      error: err.message 
+    });
+  }
+});
+
+// Get all estimates with weight machine readings
+router.get("/get/estimates-with-weights", async (req, res) => {
+  try {
+    console.log("Fetching all estimates with weight machine readings...");
+    
+    const [results] = await db.query(`
+      SELECT 
+        estimate_id,
+        estimate_number,
+        customer_name,
+        weight_machine_reading,
+        weight_machine_unit,
+        weight_machine_raw,
+        DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') as created_at,
+        DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s') as updated_at
+      FROM estimate 
+      WHERE weight_machine_reading IS NOT NULL
+      ORDER BY estimate_id DESC
+    `);
+    
+    console.log(`Found ${results.length} estimates with weight machine readings`);
+    
+    res.json({ 
+      success: true, 
+      data: results,
+      count: results.length,
+      message: "Estimates with weight readings fetched successfully"
+    });
+    
+  } catch (err) {
+    console.error("Error fetching estimates with weight readings:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch estimates with weight readings", 
+      error: err.message 
+    });
+  }
+});
+
+// Update product weight from weight machine reading
+router.post("/update/product-weight-from-machine", async (req, res) => {
+  try {
+    const { 
+      estimate_number, 
+      product_id, 
+      weight_machine_reading 
+    } = req.body;
+    
+    if (!estimate_number) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Estimate number is required" 
+      });
+    }
+    
+    if (!product_id) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Product ID is required" 
+      });
+    }
+    
+    if (weight_machine_reading === undefined || weight_machine_reading === null) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Weight machine reading is required" 
+      });
+    }
+    
+    console.log(`Updating product ${product_id} weight to ${weight_machine_reading} for estimate ${estimate_number}`);
+    
+    const query = `
+      UPDATE estimate 
+      SET 
+        gross_weight = ?,
+        weight_machine_reading = ?,
+        updated_at = NOW()
+      WHERE estimate_number = ? AND product_id = ?
+    `;
+    
+    const [result] = await db.query(query, [
+      parseFloat(weight_machine_reading),
+      parseFloat(weight_machine_reading),
+      estimate_number,
+      product_id
+    ]);
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Estimate entry not found for this product" 
+      });
+    }
+    
+    console.log(`✅ Updated ${result.affectedRows} row(s) with weight machine reading for product ${product_id}`);
+    
+    res.json({ 
+      success: true, 
+      message: "Product weight updated successfully",
+      estimate_number: estimate_number,
+      product_id: product_id,
+      gross_weight: parseFloat(weight_machine_reading)
+    });
+    
+  } catch (err) {
+    console.error("Error updating product weight from machine:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to update product weight", 
+      error: err.message 
+    });
+  }
+});
 
 module.exports = router;
