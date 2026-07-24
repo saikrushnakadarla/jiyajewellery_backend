@@ -114,7 +114,7 @@ router.post('/post/product', (req, res) => {
     // NOTE: Barcode is optional now - can be empty string or null
     const barcode = data.barcode && data.barcode.trim() !== '' ? data.barcode : null;
 
-    // VALUES array with status (34th value)
+    // VALUES array with NEW FIELDS (Cover_Wt, Card_Wt, Packing_Wt) added after gross_wt
     const values = [
       data.category_id,
       data.product_name,
@@ -126,6 +126,11 @@ router.post('/post/product', (req, res) => {
       data.design_id,
       data.design,
       sanitizeNumber(data.gross_wt),
+      // NEW FIELDS - added after gross_wt
+      sanitizeNumber(data.Cover_Wt || 0),
+      sanitizeNumber(data.Card_Wt || 0),
+      sanitizeNumber(data.Packing_Wt || 0),
+      // END NEW FIELDS
       sanitizeNumber(data.stone_wt),
       sanitizeNumber(data.net_wt),
       sanitizeNumber(data.stone_price),
@@ -152,20 +157,22 @@ router.post('/post/product', (req, res) => {
       status  // Add status field
     ];
 
-    // SQL with 34 placeholders
+    // SQL with 37 placeholders (added 3 new fields)
     const sql = `
       INSERT INTO product (
         category_id, product_name, barcode,
         metal_type_id, metal_type,
         purity_id, purity,
         design_id, design,
-        gross_wt, stone_wt, net_wt,
+        gross_wt,
+        Cover_Wt, Card_Wt, Packing_Wt,
+        stone_wt, net_wt,
         stone_price, pricing, va_on, va_percent, wastage_weight,
         total_weight_av, mc_on, mc_per_gram, making_charges,
         rate, rate_amt, hm_charges, tax_percent, tax_amt,
         total_price, pieace_cost, disscount_percentage, disscount, qty,
         images, source, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     try {
@@ -205,7 +212,6 @@ router.get('/get/products', async (req, res) => {
     res.status(500).json({ message: 'Database error' });
   }
 });
-
 
 // GET - Get single product by ID
 router.get('/get/product/:product_id', async (req, res) => {
@@ -272,7 +278,7 @@ router.put('/update/product/:product_id', (req, res) => {
 
       const barcode = data.barcode && data.barcode.trim() !== '' ? data.barcode : null;
 
-      // 33 values for UPDATE (32 SET fields + 1 WHERE)
+      // 36 values for UPDATE (35 SET fields + 1 WHERE) - added 3 new fields
       const values = [
         data.category_id,
         data.product_name,
@@ -284,6 +290,11 @@ router.put('/update/product/:product_id', (req, res) => {
         data.design_id,
         data.design,
         sanitizeNumber(data.gross_wt),
+        // NEW FIELDS
+        sanitizeNumber(data.Cover_Wt || 0),
+        sanitizeNumber(data.Card_Wt || 0),
+        sanitizeNumber(data.Packing_Wt || 0),
+        // END NEW FIELDS
         sanitizeNumber(data.stone_wt),
         sanitizeNumber(data.net_wt),
         sanitizeNumber(data.stone_price),
@@ -316,7 +327,9 @@ router.put('/update/product/:product_id', (req, res) => {
           metal_type_id = ?, metal_type = ?,
           purity_id = ?, purity = ?,
           design_id = ?, design = ?,
-          gross_wt = ?, stone_wt = ?, net_wt = ?,
+          gross_wt = ?,
+          Cover_Wt = ?, Card_Wt = ?, Packing_Wt = ?,
+          stone_wt = ?, net_wt = ?,
           stone_price = ?, pricing = ?, va_on = ?, va_percent = ?, wastage_weight = ?,
           total_weight_av = ?, mc_on = ?, mc_per_gram = ?, making_charges = ?,
           rate = ?, rate_amt = ?, hm_charges = ?, tax_percent = ?, tax_amt = ?,
@@ -439,7 +452,6 @@ router.get('/get/products/by-source/:source', async (req, res) => {
   }
 });
 
-
 // Add API endpoint to update product status
 router.put('/update/product-status/:product_id', async (req, res) => {
   const { product_id } = req.params;
@@ -487,9 +499,6 @@ router.get('/get/products/available', async (req, res) => {
     res.status(500).json({ message: 'Database error' });
   }
 });
-
-
-
 
 router.use('/uploads', express.static('uploads'));
 
