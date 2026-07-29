@@ -140,7 +140,8 @@ router.post("/upload/pack-images", uploadPackImage.array('images', 10), async (r
   }
 });
 
-// FIXED: Main Add/Update estimate endpoint
+// FIXED: Main Add/Update estimate endpoint with cover_wt, card_wt, packing_wt
+// FIXED: Main Add/Update estimate endpoint with cover_wt, card_wt, packing_wt
 router.post("/add/estimate", async (req, res) => {
   try {
     const data = req.body;
@@ -148,6 +149,15 @@ router.post("/add/estimate", async (req, res) => {
     console.log("Received packet_barcode:", data.packet_barcode);
     console.log("total_price:", data.total_price);
     console.log("net_amount:", data.net_amount);
+    
+    // CRITICAL FIX: Log and parse weight fields properly
+    const coverWt = parseFloat(data.cover_wt) || 0;
+    const cardWt = parseFloat(data.card_wt) || 0;
+    const packingWt = parseFloat(data.packing_wt) || 0;
+    
+    console.log("cover_wt:", data.cover_wt, "→ parsed:", coverWt);
+    console.log("card_wt:", data.card_wt, "→ parsed:", cardWt);
+    console.log("packing_wt:", data.packing_wt, "→ parsed:", packingWt);
     
     if (!data.date || !data.estimate_number) {
       return res.status(400).json({ message: "Missing required fields: date and estimate_number" });
@@ -209,7 +219,7 @@ router.post("/add/estimate", async (req, res) => {
       navigationPath = `/customer-transactions/${customerId}`;
     }
 
-    // Prepare values array - EXACTLY 50 placeholders
+    // Prepare values array - EXACTLY 52 placeholders (cover_wt, card_wt, packing_wt are indices 49-51)
     const insertValues = [
       data.date,                                    // 1
       data.pcode || null,                           // 2
@@ -260,14 +270,16 @@ router.post("/add/estimate", async (req, res) => {
       sanitizeNumber(data.qty),                     // 46
       packetBarcode,                                // 47
       data.packet_wt ? parseFloat(data.packet_wt) : null, // 48
-      packImagesJson                                // 49
+      packImagesJson,                               // 49
+      coverWt,                                      // 50 - cover_wt (FIXED)
+      cardWt,                                       // 51 - card_wt (FIXED)
+      packingWt                                     // 52 - packing_wt (FIXED)
     ];
 
     // Check if we're using force_insert mode or regular insert
     if (data.force_insert) {
       console.log("Force insert mode - inserting new estimate entry...");
       
-      // Count the number of placeholders - should be 49
       const placeholders = insertValues.map(() => '?').join(',');
       
       const insertSql = `
@@ -280,12 +292,13 @@ router.post("/add/estimate", async (req, res) => {
           rate, rate_amt, tax_percent, tax_amt, total_price, pricing, pieace_cost, 
           disscount_percentage, disscount, hm_charges, total_amount, taxable_amount, 
           tax_amount, net_amount, estimate_status, original_total_price, qty, 
-          packet_barcode, packet_wt, pack_images
+          packet_barcode, packet_wt, pack_images, cover_wt, card_wt, packing_wt
         ) VALUES (${placeholders})
       `;
 
       console.log("SQL Query:", insertSql);
       console.log("Values count:", insertValues.length);
+      console.log("Values:", insertValues);
       
       const [result] = await db.query(insertSql, insertValues);
 
@@ -372,6 +385,9 @@ router.post("/add/estimate", async (req, res) => {
         salesperson_id: salespersonId,
         customer_id: customerId,
         cust_id: custId,
+        cover_wt: coverWt,
+        card_wt: cardWt,
+        packing_wt: packingWt
       });
     } else {
       // Regular insert - check for existing entry
@@ -397,7 +413,7 @@ router.post("/add/estimate", async (req, res) => {
             tax_amt=?, total_price=?, pricing=?, pieace_cost=?, disscount_percentage=?, 
             disscount=?, hm_charges=?, total_amount=?, taxable_amount=?, tax_amount=?, 
             net_amount=?, original_total_price=?, qty=?, packet_barcode=?, packet_wt=?, 
-            pack_images=?, updated_at = NOW()
+            pack_images=?, cover_wt=?, card_wt=?, packing_wt=?, updated_at = NOW()
           WHERE estimate_number = ? AND code = ?`;
         
         const updateValues = [...insertValues, data.estimate_number, code];
@@ -418,6 +434,9 @@ router.post("/add/estimate", async (req, res) => {
           salesperson_id: salespersonId,
           customer_id: customerId,
           cust_id: custId,
+          cover_wt: coverWt,
+          card_wt: cardWt,
+          packing_wt: packingWt
         });
       } else {
         // INSERT new entry
@@ -435,7 +454,7 @@ router.post("/add/estimate", async (req, res) => {
             rate, rate_amt, tax_percent, tax_amt, total_price, pricing, pieace_cost, 
             disscount_percentage, disscount, hm_charges, total_amount, taxable_amount, 
             tax_amount, net_amount, estimate_status, original_total_price, qty, 
-            packet_barcode, packet_wt, pack_images
+            packet_barcode, packet_wt, pack_images, cover_wt, card_wt, packing_wt
           ) VALUES (${placeholders})`;
 
         const [result] = await db.query(insertSql, insertValues);
@@ -523,6 +542,9 @@ router.post("/add/estimate", async (req, res) => {
           salesperson_id: salespersonId,
           customer_id: customerId,
           cust_id: custId,
+          cover_wt: coverWt,
+          card_wt: cardWt,
+          packing_wt: packingWt
         });
       }
     }
@@ -703,6 +725,9 @@ router.post("/update/estimate-with-packet", async (req, res) => {
         taxable_amount = ?,
         tax_amount = ?,
         net_amount = ?,
+        cover_wt = ?,
+        card_wt = ?,
+        packing_wt = ?,
         updated_at = NOW()
       WHERE estimate_number = ?
     `;
@@ -715,6 +740,9 @@ router.post("/update/estimate-with-packet", async (req, res) => {
       sanitizeNumber(data.taxable_amount),
       sanitizeNumber(data.tax_amount),
       sanitizeNumber(data.net_amount),
+      sanitizeNumber(data.cover_wt || 0),
+      sanitizeNumber(data.card_wt || 0),
+      sanitizeNumber(data.packing_wt || 0),
       data.estimate_number
     ];
 
@@ -1021,7 +1049,7 @@ router.put("/edit/estimate/:id", async (req, res) => {
         total_weight_av=?, mc_on=?, mc_per_gram=?, making_charges=?, rate=?, rate_amt=?, 
         tax_percent=?, tax_amt=?, total_price=?, pricing=?, pieace_cost=?, 
         disscount_percentage=?, disscount=?, hm_charges=?, packet_barcode=?, packet_wt=?, 
-        pack_images=?, updated_at = NOW()
+        pack_images=?, cover_wt=?, card_wt=?, packing_wt=?, updated_at = NOW()
         WHERE ${whereClause}`;
 
     const updateValues = [
@@ -1066,6 +1094,9 @@ router.put("/edit/estimate/:id", async (req, res) => {
       data.packet_barcode || null,
       data.packet_wt ? parseFloat(data.packet_wt) : null,
       packImagesJson,
+      sanitizeNumber(data.cover_wt || 0),
+      sanitizeNumber(data.card_wt || 0),
+      sanitizeNumber(data.packing_wt || 0),
       queryId
     ];
 
@@ -1269,7 +1300,10 @@ router.get("/get-estimates/:estimate_number", async (req, res) => {
       hm_charges: row.hm_charges, 
       original_total_price: row.original_total_price,
       opentag_id: row.opentag_id, 
-      qty: row.qty
+      qty: row.qty,
+      cover_wt: row.cover_wt,
+      card_wt: row.card_wt,
+      packing_wt: row.packing_wt
     }));
 
     res.json({ uniqueData, repeatedData });
@@ -1398,7 +1432,10 @@ router.get("/get-invoice/:estimate_number", async (req, res) => {
       hm_charges: row.hm_charges,
       original_total_price: row.original_total_price,
       opentag_id: row.opentag_id,
-      qty: row.qty
+      qty: row.qty,
+      cover_wt: row.cover_wt,
+      card_wt: row.card_wt,
+      packing_wt: row.packing_wt
     }));
 
     res.json({ uniqueData, repeatedData });
@@ -1685,7 +1722,10 @@ router.get("/get-invoice/:estimate_number", async (req, res) => {
       original_total_price: row.original_total_price,
       opentag_id: row.opentag_id,
       qty: row.qty,
-      hm_charges: row.hm_charges
+      hm_charges: row.hm_charges,
+      cover_wt: row.cover_wt,
+      card_wt: row.card_wt,
+      packing_wt: row.packing_wt
     }));
 
     res.json({ uniqueData, repeatedData });
@@ -1744,8 +1784,6 @@ router.get("/get/customer-orders-count/:customerId", async (req, res) => {
     });
   }
 });
-
-
 
 // GET - Customer orders (for orders page)
 router.get("/get/customer-orders/:customerId", async (req, res) => {
@@ -1811,8 +1849,7 @@ router.get("/get/customer-orders/:customerId", async (req, res) => {
   }
 });
 
-
-// Add this endpoint to update product status when added to estimate
+// Update product status when added to estimate
 router.post("/update-product-status-on-estimate", async (req, res) => {
   try {
     const { product_id, status } = req.body;
@@ -1849,8 +1886,7 @@ router.post("/update-product-status-on-estimate", async (req, res) => {
   }
 });
 
-
-// Add this endpoint to update product status to Ordered when estimate status changes
+// Update products status to Ordered when estimate status changes
 router.post("/update-products-status-to-ordered/:estimate_number", async (req, res) => {
   try {
     const estimateNumber = req.params.estimate_number;
@@ -1899,8 +1935,6 @@ router.post("/update-products-status-to-ordered/:estimate_number", async (req, r
     res.status(500).json({ success: false, message: "Failed to update products status", error: err.message });
   }
 });
-
-
 
 // Get products for a specific estimate/order
 router.get('/get/estimate-products/:estimateNumber', async (req, res) => {
