@@ -1,7 +1,8 @@
 const express = require("express");
 const db = require("../db");
 const router = express.Router();
-const fs = require('fs').promises;
+const fs = require('fs');
+const fsPromises = require('fs').promises;
 const path = require('path');
 const multer = require('multer');
 
@@ -2296,6 +2297,373 @@ router.post("/update/product-weight-from-machine", async (req, res) => {
       success: false, 
       message: "Failed to update product weight", 
       error: err.message 
+    });
+  }
+});
+
+// ============================================
+// GEMINI API WEIGHT EXTRACTION ENDPOINTS
+// ============================================
+
+// Import GoogleGenAI SDK
+const { GoogleGenAI } = require('@google/genai');
+
+// Initialize Google AI with your API key
+const ai = new GoogleGenAI({ apiKey: "REMOVED_SECRET" });
+
+// Configure multer for weight image uploads
+const weightImageStorage = multer.diskStorage({
+  destination: async (req, file, cb) => {
+    const uploadDir = path.join(__dirname, '../uploads/weight-images');
+    try {
+      await fsPromises.mkdir(uploadDir, { recursive: true });
+      cb(null, uploadDir);
+    } catch (error) {
+      cb(error);
+    }
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    cb(null, 'weight-' + uniqueSuffix + ext);
+  }
+});
+
+const uploadWeightImage = multer({ 
+  storage: weightImageStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'));
+    }
+  }
+});
+
+// Gemini API endpoint - Extract weight from image using GoogleGenAI SDK
+router.post("/api/extract-weight-gemini", uploadWeightImage.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: "No image file uploaded" });
+    }
+
+    const { estimate_number } = req.body;
+    
+    const relativeImagePath = `uploads/weight-images/${req.file.filename}`;
+    const absoluteFilePath = path.join(__dirname, '..', relativeImagePath);
+
+    console.log(`Processing weight image with Gemini API for estimate: ${estimate_number || 'N/A'}`);
+    console.log('File path:', absoluteFilePath);
+    console.log('File exists?', fs.existsSync(absoluteFilePath));
+
+    if (!fs.existsSync(absoluteFilePath)) {
+      console.error('File not found:', absoluteFilePath);
+      return res.status(404).json({ 
+        success: false, 
+        message: "Uploaded file not found on server" 
+      });
+    }
+
+    // --- STEP 1: CONVERT SAVED IMAGE FILE TO BASE64 BLOB ---
+    const fileBuffer = fs.readFileSync(absoluteFilePath);
+    const imagePart = {
+      inlineData: {
+        data: fileBuffer.toString('base64'),
+        mimeType: req.file.mimetype
+      },
+    };
+
+    // --- STEP 2: MULTIMODAL INFERENCE VIA GEMINI SDK ---
+    // Using gemini-3.6-flash as it works in your original code
+    console.log('Calling Gemini API with model: gemini-3.6-flash');
+    
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.6-flash',
+      contents: [
+        imagePart,
+        "Analyze the digital LCD/LED screen on this weighing scale. Identify the numbers displayed and their weighing unit (e.g. g). Output your findings ONLY as a valid, raw JSON object matching this schema. Do not enclose it in markdown blocks: {\"weight_string\": \"10.12g\", \"numeric_value\": 10.12}"
+      ],
+    });
+
+    // Strip out markdown wrapper tags if the model returned them
+    const sanitizedJsonText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
+    console.log('Sanitized JSON:', sanitizedJsonText);
+    
+    const resultPayload = JSON.parse(sanitizedJsonText);
+
+    const rawText = resultPayload.weight_string;
+    const totalGrams = parseFloat(resultPayload.numeric_value);
+
+    if (isNaN(totalGrams) || totalGrams <= 0) {
+      return res.status(422).json({
+        success: false,
+        message: "The AI was unable to isolate numerical weight values from the screen display text matrix."
+      });
+    }
+
+    // --- STEP 3: CONVERT TOTAL GRAMS TO GRAMS & MILLIGRAMS ---
+    const gramsBase = Math.floor(totalGrams);
+    const fractionalPart = (totalGrams - gramsBase).toFixed(3);
+    const milligrams = Math.round(parseFloat(fractionalPart) * 1000);
+
+    // --- STEP 4: DATA STORAGE INSERTION ---
+    // Save to weight_records table
+    const insertSql = `
+      INSERT INTO weight_records (raw_text, grams, milligrams, total_grams, image_path, confidence)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `;
+
+    const [result] = await db.execute(insertSql, [
+      rawText,
+      gramsBase,
+      milligrams,
+      totalGrams,
+      relativeImagePath,
+      100
+    ]);
+
+    // Also update the estimate table with the weight data if estimate_number is provided
+    if (estimate_number) {
+      try {
+        // First check if estimate exists
+        const [checkResult] = await db.query(
+          "SELECT estimate_id FROM estimate WHERE estimate_number = ? LIMIT 1",
+          [estimate_number]
+        );
+
+        if (checkResult.length > 0) {
+          // Update the estimate with all weight fields
+          const updateSql = `
+            UPDATE estimate 
+            SET 
+              weight_machine_reading = ?,
+              weight_machine_unit = 'g',
+              weight_machine_raw = ?,
+              weight_machine_grams = ?,
+              weight_machine_milligrams = ?,
+              weight_machine_confidence = 100,
+              total_grams = ?,
+              milligrams = ?,
+              updated_at = NOW()
+            WHERE estimate_number = ?
+          `;
+          
+          await db.query(updateSql, [
+            totalGrams,
+            rawText,
+            gramsBase,
+            milligrams,
+            totalGrams,
+            milligrams,
+            estimate_number
+          ]);
+          console.log(`✅ Updated estimate ${estimate_number} with weight: ${totalGrams}g (${gramsBase}g ${milligrams}mg)`);
+        } else {
+          console.log(`⚠️ Estimate ${estimate_number} not found, weight saved only to weight_records`);
+        }
+      } catch (updateError) {
+        console.error('Error updating estimate with weight:', updateError);
+        // Don't fail the request if estimate update fails
+      }
+    }
+
+    // Return the extracted data
+    res.json({
+      success: true,
+      insertedId: result.insertId,
+      record: {
+        raw_text: rawText,
+        grams: gramsBase,
+        milligrams: milligrams,
+        total_grams: totalGrams,
+        image_path: relativeImagePath,
+        confidence: 100
+      },
+      message: "Weight extracted successfully"
+    });
+
+  } catch (error) {
+    console.error("Gemini API Weight Extraction Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "System error processing your multi-modal scale tracking pipeline.",
+      error: error.message
+    });
+  }
+});
+
+// Save weight data to estimate (manual save from frontend)
+router.post("/api/save-weight-gemini", async (req, res) => {
+  try {
+    const {
+      estimate_number,
+      total_grams,
+      grams,
+      milligrams,
+      raw_text,
+      confidence
+    } = req.body;
+
+    if (!estimate_number) {
+      return res.status(400).json({
+        success: false,
+        message: "Estimate number is required"
+      });
+    }
+
+    if (!total_grams && !grams && !milligrams) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one weight value is required"
+      });
+    }
+
+    console.log(`Saving weight data for estimate ${estimate_number}:`, {
+      total_grams,
+      grams,
+      milligrams,
+      raw_text
+    });
+
+    // Check if estimate exists
+    const [checkResult] = await db.query(
+      "SELECT estimate_id FROM estimate WHERE estimate_number = ? LIMIT 1",
+      [estimate_number]
+    );
+
+    if (checkResult.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Estimate not found"
+      });
+    }
+
+    // Update the estimate with weight data
+    const updateSql = `
+      UPDATE estimate 
+      SET 
+        weight_machine_reading = ?,
+        weight_machine_grams = ?,
+        weight_machine_milligrams = ?,
+        weight_machine_unit = 'g',
+        weight_machine_raw = ?,
+        weight_machine_confidence = ?,
+        total_grams = ?,
+        milligrams = ?,
+        updated_at = NOW()
+      WHERE estimate_number = ?
+    `;
+
+    const [result] = await db.query(updateSql, [
+      total_grams || null,
+      grams || null,
+      milligrams || null,
+      raw_text || null,
+      confidence || 100,
+      total_grams || null,
+      milligrams || null,
+      estimate_number
+    ]);
+
+    console.log(`✅ Updated ${result.affectedRows} row(s) with weight data for estimate ${estimate_number}`);
+
+    res.json({
+      success: true,
+      message: "Weight data saved successfully",
+      estimate_number: estimate_number,
+      data: {
+        total_grams: total_grams,
+        grams: grams,
+        milligrams: milligrams,
+        raw_text: raw_text,
+        confidence: confidence || 100
+      }
+    });
+
+  } catch (error) {
+    console.error("Error saving weight data:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to save weight data",
+      error: error.message
+    });
+  }
+});
+
+// Get weight data for an estimate
+router.get("/api/get-weight-gemini/:estimate_number", async (req, res) => {
+  try {
+    const estimateNumber = req.params.estimate_number;
+
+    if (!estimateNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Estimate number is required"
+      });
+    }
+
+    const [result] = await db.query(
+      `SELECT 
+        estimate_number,
+        weight_machine_reading,
+        weight_machine_grams,
+        weight_machine_milligrams,
+        weight_machine_unit,
+        weight_machine_raw,
+        weight_machine_confidence,
+        total_grams,
+        milligrams,
+        DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s') as updated_at
+      FROM estimate 
+      WHERE estimate_number = ? 
+      LIMIT 1`,
+      [estimateNumber]
+    );
+
+    if (result.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Estimate not found"
+      });
+    }
+
+    res.json({
+      success: true,
+      data: result[0],
+      message: "Weight data fetched successfully"
+    });
+
+  } catch (error) {
+    console.error("Error fetching weight data:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch weight data",
+      error: error.message
+    });
+  }
+});
+
+// Get all weight records from weight_records table
+router.get("/api/weight-records", async (req, res) => {
+  try {
+    const [results] = await db.query(
+      "SELECT * FROM weight_records ORDER BY created_at DESC LIMIT 100"
+    );
+
+    res.json({
+      success: true,
+      data: results,
+      count: results.length,
+      message: "Weight records fetched successfully"
+    });
+
+  } catch (error) {
+    console.error("Error fetching weight records:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch weight records",
+      error: error.message
     });
   }
 });
