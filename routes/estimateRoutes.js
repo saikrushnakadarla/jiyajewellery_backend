@@ -2001,7 +2001,11 @@ router.get('/get/estimate-products/:estimateNumber', async (req, res) => {
 const { GoogleGenAI } = require('@google/genai');
 
 // Initialize Google AI with your API key
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const ai = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY
+});
+
+
 
 // Configure multer for weight image uploads
 const weightImageStorage = multer.diskStorage({
