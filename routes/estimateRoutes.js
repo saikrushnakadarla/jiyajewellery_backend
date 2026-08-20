@@ -2362,8 +2362,181 @@ router.get("/api/weight-records", async (req, res) => {
       error: error.message
     });
   }
+}); 
+
+// Update assign_karigar for estimate
+router.put("/update-assign-karigar", async (req, res) => {
+  try {
+    const { estimate_number, assign_karigar_id, assign_karigar } = req.body;
+    
+    if (!estimate_number) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Estimate number is required" 
+      });
+    }
+
+    console.log(`Updating karigar assignment for estimate: ${estimate_number}`);
+    console.log(`assign_karigar_id: ${assign_karigar_id}, assign_karigar: ${assign_karigar}`);
+
+    // Check if estimate exists
+    const [checkResult] = await db.query(
+      "SELECT estimate_id FROM estimate WHERE estimate_number = ? LIMIT 1",
+      [estimate_number]
+    );
+
+    if (checkResult.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Estimate not found" 
+      });
+    }
+
+    // Update the assign_karigar and assign_karigar_id columns
+    const updateSql = `
+      UPDATE estimate 
+      SET 
+        assign_karigar_id = ?,
+        assign_karigar = ?,
+        updated_at = NOW()
+      WHERE estimate_number = ?
+    `;
+
+    const [result] = await db.query(updateSql, [
+      assign_karigar_id || null,
+      assign_karigar || null,
+      estimate_number
+    ]);
+
+    console.log(`✅ Updated karigar assignment for estimate ${estimate_number}`);
+
+    res.json({ 
+      success: true, 
+      message: "Karigar assigned successfully",
+      estimate_number: estimate_number,
+      assign_karigar_id: assign_karigar_id,
+      assign_karigar: assign_karigar
+    });
+
+  } catch (err) {
+    console.error("Error updating karigar assignment:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to assign karigar", 
+      error: err.message 
+    });
+  }
+}); 
+
+// ============================================
+// DELIVERY DATE ENDPOINTS
+// ============================================
+
+// Update delivery date for estimate
+router.put("/update-delivery-date", async (req, res) => {
+  try {
+    const { estimate_number, delivery_date } = req.body;
+    
+    if (!estimate_number) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Estimate number is required" 
+      });
+    }
+
+    console.log(`Updating delivery date for estimate: ${estimate_number}`);
+    console.log(`Delivery date: ${delivery_date || 'NULL'}`);
+
+    // Check if estimate exists
+    const [checkResult] = await db.query(
+      "SELECT estimate_id FROM estimate WHERE estimate_number = ? LIMIT 1",
+      [estimate_number]
+    );
+
+    if (checkResult.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Estimate not found" 
+      });
+    }
+
+    // Update the delivery_date column
+    const updateSql = `
+      UPDATE estimate 
+      SET 
+        delivery_date = ?,
+        updated_at = NOW()
+      WHERE estimate_number = ?
+    `;
+
+    const [result] = await db.query(updateSql, [
+      delivery_date || null,
+      estimate_number
+    ]);
+
+    console.log(`✅ Updated delivery date for estimate ${estimate_number} to ${delivery_date || 'NULL'}`);
+
+    res.json({ 
+      success: true, 
+      message: "Delivery date updated successfully",
+      estimate_number: estimate_number,
+      delivery_date: delivery_date
+    });
+
+  } catch (err) {
+    console.error("Error updating delivery date:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to update delivery date", 
+      error: err.message 
+    });
+  }
 });
 
-//
+// Get delivery date for an estimate
+router.get("/get-delivery-date/:estimate_number", async (req, res) => {
+  try {
+    const estimateNumber = req.params.estimate_number;
+
+    if (!estimateNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Estimate number is required"
+      });
+    }
+
+    const [result] = await db.query(
+      `SELECT 
+        estimate_number,
+        delivery_date,
+        DATE_FORMAT(delivery_date, '%Y-%m-%d') as delivery_date_formatted
+      FROM estimate 
+      WHERE estimate_number = ? 
+      LIMIT 1`,
+      [estimateNumber]
+    );
+
+    if (result.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Estimate not found"
+      });
+    }
+
+    res.json({
+      success: true,
+      data: result[0],
+      message: "Delivery date fetched successfully"
+    });
+
+  } catch (err) {
+    console.error("Error fetching delivery date:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch delivery date",
+      error: err.message
+    });
+  }
+});
 
 module.exports = router;
