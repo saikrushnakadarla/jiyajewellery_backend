@@ -144,6 +144,8 @@ router.post("/upload/pack-images", uploadPackImage.array('images', 10), async (r
 
 // FIXED: Main Add/Update estimate endpoint with cover_wt, card_wt, packing_wt
 // FIXED: Main Add/Update estimate endpoint with cover_wt, card_wt, packing_wt
+// MAIN Add/Update estimate endpoint with customer_order_status field
+// MAIN Add/Update estimate endpoint with customer_order_status field
 router.post("/add/estimate", async (req, res) => {
   try {
     const data = req.body;
@@ -151,6 +153,7 @@ router.post("/add/estimate", async (req, res) => {
     console.log("Received packet_barcode:", data.packet_barcode);
     console.log("total_price:", data.total_price);
     console.log("net_amount:", data.net_amount);
+    console.log("customer_order_status from frontend:", data.customer_order_status || 'Not provided');
     
     // CRITICAL FIX: Log and parse weight fields properly
     const coverWt = parseFloat(data.cover_wt) || 0;
@@ -221,7 +224,31 @@ router.post("/add/estimate", async (req, res) => {
       navigationPath = `/customer-transactions/${customerId}`;
     }
 
-    // Prepare values array - EXACTLY 52 placeholders (cover_wt, card_wt, packing_wt are indices 49-51)
+    // ============================================================
+    // FIXED: Determine customer_order_status - RESPECT FRONTEND VALUE
+    // ============================================================
+    let customerOrderStatus = 'Selected'; // Default
+    
+    if (sourceBy === 'salesman') {
+      // Salesman always creates estimates with Selected
+      customerOrderStatus = 'Selected';
+    } else if (sourceBy === 'customer') {
+      // For customer, use the value sent from frontend
+      // Frontend sends 'Selected' for Buy Now, 'Ordered' for Order Now
+      customerOrderStatus = data.customer_order_status || 'Selected';
+    } else {
+      // For other sources (admin, etc.), use frontend value or default
+      customerOrderStatus = data.customer_order_status || 'Selected';
+    }
+    
+    // Validate the value
+    if (!['Selected', 'Ordered'].includes(customerOrderStatus)) {
+      customerOrderStatus = 'Selected';
+    }
+    
+    console.log(`✅ Final customer_order_status: ${customerOrderStatus} (source: ${sourceBy})`);
+
+    // Prepare values array - Added customer_order_status as 53rd value
     const insertValues = [
       data.date,                                    // 1
       data.pcode || null,                           // 2
@@ -273,9 +300,10 @@ router.post("/add/estimate", async (req, res) => {
       packetBarcode,                                // 47
       data.packet_wt ? parseFloat(data.packet_wt) : null, // 48
       packImagesJson,                               // 49
-      coverWt,                                      // 50 - cover_wt (FIXED)
-      cardWt,                                       // 51 - card_wt (FIXED)
-      packingWt                                     // 52 - packing_wt (FIXED)
+      coverWt,                                      // 50 - cover_wt
+      cardWt,                                       // 51 - card_wt
+      packingWt,                                    // 52 - packing_wt
+      customerOrderStatus                           // 53 - customer_order_status
     ];
 
     // Check if we're using force_insert mode or regular insert
@@ -294,13 +322,14 @@ router.post("/add/estimate", async (req, res) => {
           rate, rate_amt, tax_percent, tax_amt, total_price, pricing, pieace_cost, 
           disscount_percentage, disscount, hm_charges, total_amount, taxable_amount, 
           tax_amount, net_amount, estimate_status, original_total_price, qty, 
-          packet_barcode, packet_wt, pack_images, cover_wt, card_wt, packing_wt
+          packet_barcode, packet_wt, pack_images, cover_wt, card_wt, packing_wt,
+          customer_order_status
         ) VALUES (${placeholders})
       `;
 
       console.log("SQL Query:", insertSql);
       console.log("Values count:", insertValues.length);
-      console.log("Values:", insertValues);
+      console.log("customer_order_status being inserted:", customerOrderStatus);
       
       const [result] = await db.query(insertSql, insertValues);
 
@@ -389,7 +418,8 @@ router.post("/add/estimate", async (req, res) => {
         cust_id: custId,
         cover_wt: coverWt,
         card_wt: cardWt,
-        packing_wt: packingWt
+        packing_wt: packingWt,
+        customer_order_status: customerOrderStatus
       });
     } else {
       // Regular insert - check for existing entry
@@ -415,7 +445,8 @@ router.post("/add/estimate", async (req, res) => {
             tax_amt=?, total_price=?, pricing=?, pieace_cost=?, disscount_percentage=?, 
             disscount=?, hm_charges=?, total_amount=?, taxable_amount=?, tax_amount=?, 
             net_amount=?, original_total_price=?, qty=?, packet_barcode=?, packet_wt=?, 
-            pack_images=?, cover_wt=?, card_wt=?, packing_wt=?, updated_at = NOW()
+            pack_images=?, cover_wt=?, card_wt=?, packing_wt=?, customer_order_status=?,
+            updated_at = NOW()
           WHERE estimate_number = ? AND code = ?`;
         
         const updateValues = [...insertValues, data.estimate_number, code];
@@ -438,7 +469,8 @@ router.post("/add/estimate", async (req, res) => {
           cust_id: custId,
           cover_wt: coverWt,
           card_wt: cardWt,
-          packing_wt: packingWt
+          packing_wt: packingWt,
+          customer_order_status: customerOrderStatus
         });
       } else {
         // INSERT new entry
@@ -456,7 +488,8 @@ router.post("/add/estimate", async (req, res) => {
             rate, rate_amt, tax_percent, tax_amt, total_price, pricing, pieace_cost, 
             disscount_percentage, disscount, hm_charges, total_amount, taxable_amount, 
             tax_amount, net_amount, estimate_status, original_total_price, qty, 
-            packet_barcode, packet_wt, pack_images, cover_wt, card_wt, packing_wt
+            packet_barcode, packet_wt, pack_images, cover_wt, card_wt, packing_wt,
+            customer_order_status
           ) VALUES (${placeholders})`;
 
         const [result] = await db.query(insertSql, insertValues);
@@ -546,7 +579,8 @@ router.post("/add/estimate", async (req, res) => {
           cust_id: custId,
           cover_wt: coverWt,
           card_wt: cardWt,
-          packing_wt: packingWt
+          packing_wt: packingWt,
+          customer_order_status: customerOrderStatus
         });
       }
     }
@@ -558,34 +592,127 @@ router.post("/add/estimate", async (req, res) => {
 });
 
 // Update packet barcode for all entries with same estimate_number
-router.put("/update/estimate-packet/:estimate_number", async (req, res) => {
+router.put("/update-customer-order-status/:estimate_number", async (req, res) => {
   try {
     const estimateNumber = req.params.estimate_number;
-    const { packet_barcode, packet_wt } = req.body;
+    const { customer_order_status } = req.body;
     
     if (!estimateNumber) {
-      return res.status(400).json({ message: "Estimate number is required" });
+      return res.status(400).json({ 
+        success: false, 
+        message: "Estimate number is required" 
+      });
     }
     
-    console.log(`Updating packet barcode for estimate: ${estimateNumber}`);
-    console.log(`New packet_barcode: ${packet_barcode}`);
-    
-    const [result] = await db.query(
-      "UPDATE estimate SET packet_barcode = ?, packet_wt = ?, updated_at = NOW() WHERE estimate_number = ?",
-      [packet_barcode || null, packet_wt ? parseFloat(packet_wt) : null, estimateNumber]
+    if (!customer_order_status || !['Selected', 'Ordered'].includes(customer_order_status)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Valid customer_order_status is required (Selected or Ordered)" 
+      });
+    }
+
+    console.log(`Updating customer_order_status for estimate ${estimateNumber} to: ${customer_order_status}`);
+
+    // Check if estimate exists
+    const [checkResult] = await db.query(
+      "SELECT estimate_id, source_by FROM estimate WHERE estimate_number = ? LIMIT 1",
+      [estimateNumber]
     );
-    
-    console.log(`Updated ${result.affectedRows} entries with packet barcode: ${packet_barcode}`);
-    
+
+    if (checkResult.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Estimate not found" 
+      });
+    }
+
+    // If source is salesman, only allow Selected
+    if (checkResult[0].source_by === 'salesman' && customer_order_status === 'Ordered') {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Salesman estimates can only have customer_order_status = 'Selected'" 
+      });
+    }
+
+    // Update the customer_order_status
+    const [result] = await db.query(
+      "UPDATE estimate SET customer_order_status = ?, updated_at = NOW() WHERE estimate_number = ?",
+      [customer_order_status, estimateNumber]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(500).json({ 
+        success: false, 
+        message: "Failed to update customer order status" 
+      });
+    }
+
+    console.log(`✅ Updated customer_order_status for estimate ${estimateNumber} to ${customer_order_status}`);
+
     res.json({ 
       success: true, 
-      message: "Packet barcode updated successfully",
-      affected_rows: result.affectedRows,
-      packet_barcode: packet_barcode
+      message: "Customer order status updated successfully",
+      estimate_number: estimateNumber,
+      customer_order_status: customer_order_status
     });
+
   } catch (err) {
-    console.error("Error updating packet barcode:", err);
-    res.status(500).json({ message: "Server error", error: err.message });
+    console.error("Error updating customer order status:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to update customer order status", 
+      error: err.message 
+    });
+  }
+});
+
+// Update product status endpoint - Used when adding to cart/order
+router.put("/update-product-status", async (req, res) => {
+  try {
+    const { product_id, status } = req.body;
+    
+    if (!product_id) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Product ID is required" 
+      });
+    }
+    
+    if (!status || !['Selected', 'Available', 'Ordered'].includes(status)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Valid status is required (Selected, Available, or Ordered)" 
+      });
+    }
+
+    console.log(`Updating product ${product_id} status to: ${status}`);
+
+    const [result] = await db.query(
+      "UPDATE product SET status = ? WHERE product_id = ?",
+      [status, product_id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Product not found" 
+      });
+    }
+
+    res.json({ 
+      success: true, 
+      message: "Product status updated successfully",
+      product_id: product_id,
+      status: status
+    });
+
+  } catch (err) {
+    console.error("Error updating product status:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to update product status", 
+      error: err.message 
+    });
   }
 });
 
@@ -871,6 +998,8 @@ router.get("/get/estimates-by-source/:source", async (req, res) => {
   }
 });
 
+
+// Update estimate status by ID
 // Update estimate status by ID
 router.put("/update-estimate-status/:id", async (req, res) => {
   try {
@@ -1017,6 +1146,7 @@ router.put("/update-estimate-status/:id", async (req, res) => {
 });
 
 // Edit estimate by ID
+// Edit estimate by ID
 router.put("/edit/estimate/:id", async (req, res) => {
   try {
     const id = req.params.id;
@@ -1051,7 +1181,8 @@ router.put("/edit/estimate/:id", async (req, res) => {
         total_weight_av=?, mc_on=?, mc_per_gram=?, making_charges=?, rate=?, rate_amt=?, 
         tax_percent=?, tax_amt=?, total_price=?, pricing=?, pieace_cost=?, 
         disscount_percentage=?, disscount=?, hm_charges=?, packet_barcode=?, packet_wt=?, 
-        pack_images=?, cover_wt=?, card_wt=?, packing_wt=?, updated_at = NOW()
+        pack_images=?, cover_wt=?, card_wt=?, packing_wt=?, customer_order_status=?,
+        updated_at = NOW()
         WHERE ${whereClause}`;
 
     const updateValues = [
@@ -1099,6 +1230,7 @@ router.put("/edit/estimate/:id", async (req, res) => {
       sanitizeNumber(data.cover_wt || 0),
       sanitizeNumber(data.card_wt || 0),
       sanitizeNumber(data.packing_wt || 0),
+      data.customer_order_status || 'Selected',
       queryId
     ];
 
@@ -1113,6 +1245,8 @@ router.put("/edit/estimate/:id", async (req, res) => {
   }
 });
 
+
+// Delete estimate by estimate_number
 // Delete estimate by estimate_number
 router.delete("/delete/estimate/:estimate_number", async (req, res) => {
   try {
@@ -1179,6 +1313,7 @@ router.delete("/delete/estimate/:estimate_number", async (req, res) => {
   }
 });
 
+
 // Get last estimate number
 router.get("/lastEstimateNumber", async (req, res) => {
   try {
@@ -1202,6 +1337,7 @@ router.get("/lastEstimateNumber", async (req, res) => {
     res.status(500).json({ message: "Failed to fetch last estimate number", error: err.message });
   }
 });
+
 
 // Get next order number (preview only)
 router.get("/next-order-number", async (req, res) => {
@@ -1235,6 +1371,8 @@ router.get("/get-unique-estimates", async (req, res) => {
   }
 });
 
+
+// Get estimates by estimate_number
 // Get estimates by estimate_number
 router.get("/get-estimates/:estimate_number", async (req, res) => {
   try {
@@ -1267,7 +1405,8 @@ router.get("/get-estimates/:estimate_number", async (req, res) => {
       packet_wt: results[0].packet_wt,
       pack_images: results[0].pack_images,
       weight_machine_reading: results[0].weight_machine_reading,
-      weight_machine_unit: results[0].weight_machine_unit
+      weight_machine_unit: results[0].weight_machine_unit,
+      customer_order_status: results[0].customer_order_status
     };
 
     const repeatedData = results.map(row => ({
@@ -1313,6 +1452,7 @@ router.get("/get-estimates/:estimate_number", async (req, res) => {
     res.status(500).json({ message: "Error fetching data", error: err.message });
   }
 });
+
 
 // Save invoice PDF to server
 router.post("/save-invoice/:estimate_number", async (req, res) => {
@@ -1399,7 +1539,8 @@ router.get("/get-invoice/:estimate_number", async (req, res) => {
       pdf_generated: results[0].pdf_generated,
       estimate_status: results[0].estimate_status,
       weight_machine_reading: results[0].weight_machine_reading,
-      weight_machine_unit: results[0].weight_machine_unit
+      weight_machine_unit: results[0].weight_machine_unit,
+      customer_order_status: results[0].customer_order_status
     };
 
     const repeatedData = results.map(row => ({
@@ -1489,7 +1630,6 @@ router.put("/update-estimate-status/:estimate_number", async (req, res) => {
 
     console.log(`Updating estimate ${estimateNumber} to status: ${estimate_status}`);
 
-    // Check if estimate exists and get current status
     const [checkResult] = await db.query(
       "SELECT estimate_id, estimate_status, order_number FROM estimate WHERE estimate_number = ? LIMIT 1",
       [estimateNumber]
@@ -1503,14 +1643,12 @@ router.put("/update-estimate-status/:estimate_number", async (req, res) => {
     let orderNumber = checkResult[0].order_number;
     let orderDate = null;
 
-    // If status is changing to Ordered and no order number exists, generate one
     if (estimate_status === "Ordered" && !orderNumber) {
       orderNumber = await generateOrderNumber();
       orderDate = new Date().toISOString().split('T')[0];
       console.log(`Generated order number for estimate ${estimateNumber}: ${orderNumber}`);
     }
 
-    // Update the status
     let updateSql = "UPDATE estimate SET estimate_status = ?, updated_at = NOW()";
     const updateValues = [estimate_status];
 
@@ -1613,6 +1751,7 @@ router.post("/update-estimate-with-invoice", async (req, res) => {
     });
   }
 });
+
 
 // Get unique estimates with invoice numbers
 router.get("/get-unique-estimates", async (req, res) => {
@@ -1742,7 +1881,7 @@ router.get("/get-invoice/:estimate_number", async (req, res) => {
 
 // Add this endpoint to your estimate routes file
 
-// GET - Customer orders count (for navbar badge)
+// Get customer orders count
 router.get("/get/customer-orders-count/:customerId", async (req, res) => {
   try {
     const customerId = req.params.customerId;
@@ -1756,8 +1895,6 @@ router.get("/get/customer-orders-count/:customerId", async (req, res) => {
     
     console.log(`Fetching orders count for customer: ${customerId}`);
     
-    // Count orders for this customer where estimate_status is 'Ordered'
-    // and source_by is 'customer'
     const [result] = await db.query(
       `SELECT COUNT(DISTINCT estimate_number) as order_count 
        FROM estimate 
@@ -1787,7 +1924,7 @@ router.get("/get/customer-orders-count/:customerId", async (req, res) => {
   }
 });
 
-// GET - Customer orders (for orders page)
+// Get customer orders
 router.get("/get/customer-orders/:customerId", async (req, res) => {
   try {
     const customerId = req.params.customerId;
@@ -1801,7 +1938,6 @@ router.get("/get/customer-orders/:customerId", async (req, res) => {
     
     console.log(`Fetching orders for customer: ${customerId}`);
     
-    // Get unique orders for this customer
     const [orders] = await db.query(
       `SELECT DISTINCT 
         estimate_number,
@@ -1811,7 +1947,8 @@ router.get("/get/customer-orders/:customerId", async (req, res) => {
         net_amount,
         total_price,
         created_at,
-        updated_at
+        updated_at,
+        customer_order_status
       FROM estimate 
       WHERE customer_id = ? 
       AND source_by = 'customer' 
@@ -1820,7 +1957,6 @@ router.get("/get/customer-orders/:customerId", async (req, res) => {
       [customerId]
     );
     
-    // For each order, get item count
     for (let order of orders) {
       const [items] = await db.query(
         `SELECT COUNT(*) as item_count, GROUP_CONCAT(product_name) as product_names
@@ -1850,6 +1986,56 @@ router.get("/get/customer-orders/:customerId", async (req, res) => {
     });
   }
 });
+
+
+// Get customer_order_status for an estimate
+router.get("/get-customer-order-status/:estimate_number", async (req, res) => {
+  try {
+    const estimateNumber = req.params.estimate_number;
+
+    if (!estimateNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Estimate number is required"
+      });
+    }
+
+    const [result] = await db.query(
+      `SELECT 
+        estimate_number,
+        customer_order_status,
+        source_by,
+        estimate_status
+      FROM estimate 
+      WHERE estimate_number = ? 
+      LIMIT 1`,
+      [estimateNumber]
+    );
+
+    if (result.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Estimate not found"
+      });
+    }
+
+    res.json({
+      success: true,
+      data: result[0],
+      message: "Customer order status fetched successfully"
+    });
+
+  } catch (err) {
+    console.error("Error fetching customer order status:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch customer order status",
+      error: err.message
+    });
+  }
+});
+
+
 
 // Update product status when added to estimate
 router.post("/update-product-status-on-estimate", async (req, res) => {
@@ -1889,6 +2075,7 @@ router.post("/update-product-status-on-estimate", async (req, res) => {
 });
 
 // Update products status to Ordered when estimate status changes
+// Update products status to Ordered when estimate status changes
 router.post("/update-products-status-to-ordered/:estimate_number", async (req, res) => {
   try {
     const estimateNumber = req.params.estimate_number;
@@ -1899,7 +2086,6 @@ router.post("/update-products-status-to-ordered/:estimate_number", async (req, r
 
     console.log(`Updating product status to Ordered for estimate: ${estimateNumber}`);
 
-    // Get all product_ids from this estimate
     const [estimateProducts] = await db.query(
       "SELECT DISTINCT product_id FROM estimate WHERE estimate_number = ?",
       [estimateNumber]
@@ -1909,7 +2095,6 @@ router.post("/update-products-status-to-ordered/:estimate_number", async (req, r
       return res.status(404).json({ success: false, message: "No products found for this estimate" });
     }
 
-    // Update each product status to "Ordered"
     let updatedCount = 0;
     for (const product of estimateProducts) {
       if (product.product_id) {
@@ -1939,6 +2124,7 @@ router.post("/update-products-status-to-ordered/:estimate_number", async (req, r
 });
 
 // Get products for a specific estimate/order
+// Get products for a specific estimate/order
 router.get('/get/estimate-products/:estimateNumber', async (req, res) => {
     try {
         const { estimateNumber } = req.params;
@@ -1961,7 +2147,6 @@ router.get('/get/estimate-products/:estimateNumber', async (req, res) => {
             )
         `, [estimateNumber]);
         
-        // Parse images JSON for each product
         const formattedProducts = products.map(product => ({
             ...product,
             images: product.images ? JSON.parse(product.images) : []
@@ -1981,6 +2166,7 @@ router.get('/get/estimate-products/:estimateNumber', async (req, res) => {
         });
     }
 });
+
 
 // ============================================
 // WEIGHT MACHINE ENDPOINTS (ENHANCED)
@@ -2061,7 +2247,6 @@ router.post("/api/extract-weight-gemini", uploadWeightImage.single('image'), asy
       });
     }
 
-    // --- STEP 1: CONVERT SAVED IMAGE FILE TO BASE64 BLOB ---
     const fileBuffer = fs.readFileSync(absoluteFilePath);
     const imagePart = {
       inlineData: {
@@ -2070,8 +2255,6 @@ router.post("/api/extract-weight-gemini", uploadWeightImage.single('image'), asy
       },
     };
 
-    // --- STEP 2: MULTIMODAL INFERENCE VIA GEMINI SDK ---
-    // Using gemini-3.6-flash as it works in your original code
     console.log('Calling Gemini API with model: gemini-3.6-flash');
     
     const response = await ai.models.generateContent({
@@ -2082,7 +2265,6 @@ router.post("/api/extract-weight-gemini", uploadWeightImage.single('image'), asy
       ],
     });
 
-    // Strip out markdown wrapper tags if the model returned them
     const sanitizedJsonText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
     console.log('Sanitized JSON:', sanitizedJsonText);
     
@@ -2098,13 +2280,10 @@ router.post("/api/extract-weight-gemini", uploadWeightImage.single('image'), asy
       });
     }
 
-    // --- STEP 3: CONVERT TOTAL GRAMS TO GRAMS & MILLIGRAMS ---
     const gramsBase = Math.floor(totalGrams);
     const fractionalPart = (totalGrams - gramsBase).toFixed(3);
     const milligrams = Math.round(parseFloat(fractionalPart) * 1000);
 
-    // --- STEP 4: DATA STORAGE INSERTION ---
-    // Save to weight_records table
     const insertSql = `
       INSERT INTO weight_records (raw_text, grams, milligrams, total_grams, image_path, confidence)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -2119,17 +2298,14 @@ router.post("/api/extract-weight-gemini", uploadWeightImage.single('image'), asy
       100
     ]);
 
-    // Also update the estimate table with the weight data if estimate_number is provided
     if (estimate_number) {
       try {
-        // First check if estimate exists
         const [checkResult] = await db.query(
           "SELECT estimate_id FROM estimate WHERE estimate_number = ? LIMIT 1",
           [estimate_number]
         );
 
         if (checkResult.length > 0) {
-          // Update the estimate with all weight fields
           const updateSql = `
             UPDATE estimate 
             SET 
@@ -2160,11 +2336,9 @@ router.post("/api/extract-weight-gemini", uploadWeightImage.single('image'), asy
         }
       } catch (updateError) {
         console.error('Error updating estimate with weight:', updateError);
-        // Don't fail the request if estimate update fails
       }
     }
 
-    // Return the extracted data
     res.json({
       success: true,
       insertedId: result.insertId,
@@ -2187,7 +2361,7 @@ router.post("/api/extract-weight-gemini", uploadWeightImage.single('image'), asy
       error: error.message
     });
   }
-});
+});;
 
 // Save weight data to estimate (manual save from frontend)
 router.post("/api/save-weight-gemini", async (req, res) => {
@@ -2222,7 +2396,6 @@ router.post("/api/save-weight-gemini", async (req, res) => {
       raw_text
     });
 
-    // Check if estimate exists
     const [checkResult] = await db.query(
       "SELECT estimate_id FROM estimate WHERE estimate_number = ? LIMIT 1",
       [estimate_number]
@@ -2235,7 +2408,6 @@ router.post("/api/save-weight-gemini", async (req, res) => {
       });
     }
 
-    // Update the estimate with weight data
     const updateSql = `
       UPDATE estimate 
       SET 
@@ -2340,7 +2512,7 @@ router.get("/api/get-weight-gemini/:estimate_number", async (req, res) => {
   }
 });
 
-// Get all weight records from weight_records table
+// Get all weight records
 router.get("/api/weight-records", async (req, res) => {
   try {
     const [results] = await db.query(
@@ -2379,7 +2551,6 @@ router.put("/update-assign-karigar", async (req, res) => {
     console.log(`Updating karigar assignment for estimate: ${estimate_number}`);
     console.log(`assign_karigar_id: ${assign_karigar_id}, assign_karigar: ${assign_karigar}`);
 
-    // Check if estimate exists
     const [checkResult] = await db.query(
       "SELECT estimate_id FROM estimate WHERE estimate_number = ? LIMIT 1",
       [estimate_number]
@@ -2392,7 +2563,6 @@ router.put("/update-assign-karigar", async (req, res) => {
       });
     }
 
-    // Update the assign_karigar and assign_karigar_id columns
     const updateSql = `
       UPDATE estimate 
       SET 
@@ -2428,10 +2598,6 @@ router.put("/update-assign-karigar", async (req, res) => {
   }
 }); 
 
-// ============================================
-// DELIVERY DATE ENDPOINTS
-// ============================================
-
 // Update delivery date for estimate
 router.put("/update-delivery-date", async (req, res) => {
   try {
@@ -2447,7 +2613,6 @@ router.put("/update-delivery-date", async (req, res) => {
     console.log(`Updating delivery date for estimate: ${estimate_number}`);
     console.log(`Delivery date: ${delivery_date || 'NULL'}`);
 
-    // Check if estimate exists
     const [checkResult] = await db.query(
       "SELECT estimate_id FROM estimate WHERE estimate_number = ? LIMIT 1",
       [estimate_number]
@@ -2460,7 +2625,6 @@ router.put("/update-delivery-date", async (req, res) => {
       });
     }
 
-    // Update the delivery_date column
     const updateSql = `
       UPDATE estimate 
       SET 
