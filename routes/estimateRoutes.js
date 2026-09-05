@@ -2703,4 +2703,50 @@ router.get("/get-delivery-date/:estimate_number", async (req, res) => {
   }
 });
 
+
+// Update packet barcode/weight for all existing rows of an estimate
+// (used when packet is scanned AFTER product(s) already saved)
+router.put("/update/estimate-packet/:estimate_number", async (req, res) => {
+  try {
+    const estimateNumber = req.params.estimate_number;
+    const { packet_barcode, packet_wt } = req.body;
+
+    if (!estimateNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Estimate number is required"
+      });
+    }
+
+    console.log(`Updating packet_barcode for estimate ${estimateNumber}: ${packet_barcode}`);
+
+    const [result] = await db.query(
+      "UPDATE estimate SET packet_barcode = ?, packet_wt = ?, updated_at = NOW() WHERE estimate_number = ?",
+      [
+        packet_barcode || null,
+        packet_wt ? parseFloat(packet_wt) : null,
+        estimateNumber
+      ]
+    );
+
+    console.log(`✅ Updated ${result.affectedRows} row(s) with packet barcode for estimate ${estimateNumber}`);
+
+    res.json({
+      success: true,
+      message: "Packet barcode updated successfully",
+      estimate_number: estimateNumber,
+      packet_barcode: packet_barcode,
+      packet_wt: packet_wt,
+      affected_rows: result.affectedRows
+    });
+  } catch (err) {
+    console.error("Error updating estimate packet barcode:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update packet barcode",
+      error: err.message
+    });
+  }
+});
+
 module.exports = router;
