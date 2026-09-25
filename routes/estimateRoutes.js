@@ -1147,6 +1147,7 @@ router.put("/update-estimate-status/:id", async (req, res) => {
 
 // Edit estimate by ID
 // Edit estimate by ID
+// Edit estimate by ID
 router.put("/edit/estimate/:id", async (req, res) => {
   try {
     const id = req.params.id;
@@ -1173,8 +1174,10 @@ router.put("/edit/estimate/:id", async (req, res) => {
     
     const packImagesJson = JSON.stringify(packImages);
 
+    // ✅ FIX: SQL column list now includes cust_id as its own column,
+    // and the order below matches updateValues exactly, 1-to-1.
     const sql = `UPDATE estimate SET
-        date=?, pcode=?, customer_name=?, customer_id=?, salesperson_id=?, source_by=?, 
+        date=?, pcode=?, customer_name=?, customer_id=?, cust_id=?, salesperson_id=?, source_by=?, 
         estimate_status=?, estimate_number=?, code=?, product_id=?, product_name=?, 
         metal_type=?, design_name=?, purity=?, category=?, sub_category=?, gross_weight=?, 
         stone_weight=?, stone_price=?, weight_bw=?, va_on=?, va_percent=?, wastage_weight=?, 
@@ -1190,7 +1193,7 @@ router.put("/edit/estimate/:id", async (req, res) => {
       data.pcode || null, 
       data.customer_name, 
       data.customer_id, 
-      data.cust_id,
+      data.cust_id,          // ✅ now has its own placeholder in the SQL above
       data.salesperson_id, 
       data.source_by, 
       data.estimate_status || "Pending", 
