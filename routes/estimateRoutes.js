@@ -2186,185 +2186,625 @@ router.get('/get/estimate-products/:estimateNumber', async (req, res) => {
 // GEMINI API WEIGHT EXTRACTION ENDPOINTS
 // ============================================
 
+// ==================== GEMINI WEIGHT EXTRACTION ====================
+
 // Import GoogleGenAI SDK
 const { GoogleGenAI } = require('@google/genai');
 
-// Initialize Google AI with your API key
+// Initialize Google AI
 const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY
+  apiKey: process.env.GEMINI_API_KEY
 });
 
 
+// ==================== MULTER CONFIGURATION ====================
 
-// Configure multer for weight image uploads
-const weightImageStorage = multer.diskStorage({
-  destination: async (req, file, cb) => {
-    const uploadDir = path.join(__dirname, '../uploads/weight-images');
-    try {
-      await fsPromises.mkdir(uploadDir, { recursive: true });
-      cb(null, uploadDir);
-    } catch (error) {
-      cb(error);
+const storageWeightImage = multer.diskStorage({
+  destination: (req, file, cb) => {
+
+    const uploadDir = path.join(
+      __dirname,
+      '..',
+      'uploads',
+      'weight-images'
+    );
+
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, {
+        recursive: true
+      });
     }
+
+    cb(null, uploadDir);
   },
+
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
-    cb(null, 'weight-' + uniqueSuffix + ext);
+
+    const uniqueName =
+      `weight-${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(file.originalname)}`;
+
+    cb(null, uniqueName);
   }
 });
 
-const uploadWeightImage = multer({ 
-  storage: weightImageStorage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+
+const uploadWeightImage = multer({
+  storage: storageWeightImage,
+
+  limits: {
+    fileSize: 10 * 1024 * 1024
+  },
+
   fileFilter: (req, file, cb) => {
+
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
-      cb(new Error('Only image files are allowed'));
+      cb(
+        new Error('Only image files are allowed'),
+        false
+      );
     }
   }
 });
 
-// Gemini API endpoint - Extract weight from image using GoogleGenAI SDK
-router.post("/api/extract-weight-gemini", uploadWeightImage.single('image'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: "No image file uploaded" });
-    }
 
-    const { estimate_number } = req.body;
-    
-    const relativeImagePath = `uploads/weight-images/${req.file.filename}`;
-    const absoluteFilePath = path.join(__dirname, '..', relativeImagePath);
+// ==================== EXTRACT WEIGHT FROM IMAGE ====================
 
-    console.log(`Processing weight image with Gemini API for estimate: ${estimate_number || 'N/A'}`);
-    console.log('File path:', absoluteFilePath);
-    console.log('File exists?', fs.existsSync(absoluteFilePath));
+router.post(
+  "/api/extract-weight-gemini",
+  uploadWeightImage.single('image'),
 
-    if (!fs.existsSync(absoluteFilePath)) {
-      console.error('File not found:', absoluteFilePath);
-      return res.status(404).json({ 
-        success: false, 
-        message: "Uploaded file not found on server" 
-      });
-    }
+  async (req, res) => {
 
-    const fileBuffer = fs.readFileSync(absoluteFilePath);
-    const imagePart = {
-      inlineData: {
-        data: fileBuffer.toString('base64'),
-        mimeType: req.file.mimetype
-      },
-    };
+    try {
 
-    console.log('Calling Gemini API with model: gemini-3.6-flash');
-    
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
-      contents: [
-        imagePart,
-        "Analyze the digital LCD/LED screen on this weighing scale. Identify the numbers displayed and their weighing unit (e.g. g). Output your findings ONLY as a valid, raw JSON object matching this schema. Do not enclose it in markdown blocks: {\"weight_string\": \"10.12g\", \"numeric_value\": 10.12}"
-      ],
-    });
+      // ==================================================
+      // 1. CHECK IMAGE
+      // ==================================================
 
-    const sanitizedJsonText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
-    console.log('Sanitized JSON:', sanitizedJsonText);
-    
-    const resultPayload = JSON.parse(sanitizedJsonText);
+      if (!req.file) {
 
-    const rawText = resultPayload.weight_string;
-    const totalGrams = parseFloat(resultPayload.numeric_value);
+        return res.status(400).json({
+          success: false,
+          message: "No image file uploaded"
+        });
+      }
 
-    if (isNaN(totalGrams) || totalGrams <= 0) {
-      return res.status(422).json({
-        success: false,
-        message: "The AI was unable to isolate numerical weight values from the screen display text matrix."
-      });
-    }
 
-    const gramsBase = Math.floor(totalGrams);
-    const fractionalPart = (totalGrams - gramsBase).toFixed(3);
-    const milligrams = Math.round(parseFloat(fractionalPart) * 1000);
+      const {
+        estimate_number
+      } = req.body;
 
-    const insertSql = `
-      INSERT INTO weight_records (raw_text, grams, milligrams, total_grams, image_path, confidence)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `;
 
-    const [result] = await db.execute(insertSql, [
-      rawText,
-      gramsBase,
-      milligrams,
-      totalGrams,
-      relativeImagePath,
-      100
-    ]);
+      // ==================================================
+      // 2. IMAGE PATH
+      // ==================================================
 
-    if (estimate_number) {
-      try {
-        const [checkResult] = await db.query(
-          "SELECT estimate_id FROM estimate WHERE estimate_number = ? LIMIT 1",
-          [estimate_number]
+      const relativeImagePath =
+        `uploads/weight-images/${req.file.filename}`;
+
+      const absoluteFilePath =
+        path.join(
+          __dirname,
+          '..',
+          relativeImagePath
         );
 
-        if (checkResult.length > 0) {
-          const updateSql = `
-            UPDATE estimate 
-            SET 
-              weight_machine_reading = ?,
-              weight_machine_unit = 'g',
-              weight_machine_raw = ?,
-              weight_machine_grams = ?,
-              weight_machine_milligrams = ?,
-              weight_machine_confidence = 100,
-              total_grams = ?,
-              milligrams = ?,
-              updated_at = NOW()
-            WHERE estimate_number = ?
-          `;
-          
-          await db.query(updateSql, [
-            totalGrams,
+
+      console.log(
+        `Processing weight image with Gemini API for estimate: ${estimate_number || 'N/A'}`
+      );
+
+      console.log(
+        'File path:',
+        absoluteFilePath
+      );
+
+      console.log(
+        'File exists?',
+        fs.existsSync(absoluteFilePath)
+      );
+
+
+      // ==================================================
+      // 3. CHECK FILE EXISTS
+      // ==================================================
+
+      if (!fs.existsSync(absoluteFilePath)) {
+
+        console.error(
+          'File not found:',
+          absoluteFilePath
+        );
+
+        return res.status(404).json({
+          success: false,
+          message:
+            "Uploaded file not found on server"
+        });
+      }
+
+
+      // ==================================================
+      // 4. READ IMAGE
+      // ==================================================
+
+      const fileBuffer =
+        fs.readFileSync(
+          absoluteFilePath
+        );
+
+
+      const imagePart = {
+        inlineData: {
+          data:
+            fileBuffer.toString('base64'),
+
+          mimeType:
+            req.file.mimetype
+        }
+      };
+
+
+      // ==================================================
+      // 5. GEMINI PROMPT
+      // ==================================================
+
+      const weightPrompt =
+        "Analyze the digital LCD/LED screen on this weighing scale. " +
+        "Identify the numbers displayed and their weighing unit. " +
+        "The unit is normally grams (g). " +
+        "Read only the actual weight shown on the scale display. " +
+        "Do not guess or invent a value. " +
+        "Output ONLY a valid raw JSON object using exactly this format: " +
+        "{\"weight_string\":\"10.12g\",\"numeric_value\":10.12}";
+
+
+      // ==================================================
+      // 6. CALL GEMINI
+      // ==================================================
+
+      let response = null;
+
+      let lastGeminiError = null;
+
+
+      // Use the new model instead of gemini-3.6-flash
+      const geminiModel =
+        'gemini-3.1-flash-lite';
+
+
+      // ==================================================
+      // 7. RETRY GEMINI 3 TIMES
+      // ==================================================
+
+      for (
+        let attempt = 1;
+        attempt <= 3;
+        attempt++
+      ) {
+
+        try {
+
+          console.log(
+            `Calling Gemini API with model: ${geminiModel} (attempt ${attempt}/3)`
+          );
+
+
+          response =
+            await ai.models.generateContent({
+
+              model: geminiModel,
+
+              contents: [
+                imagePart,
+                weightPrompt
+              ]
+
+            });
+
+
+          console.log(
+            `✅ Gemini response received successfully using ${geminiModel}`
+          );
+
+
+          break;
+
+
+        } catch (error) {
+
+          lastGeminiError =
+            error;
+
+
+          const status =
+            error?.status ||
+            error?.code;
+
+
+          console.error(
+            `Gemini attempt ${attempt} failed:`,
+            error?.message ||
+            error
+          );
+
+
+          // ----------------------------------------------
+          // Retry temporary errors
+          // ----------------------------------------------
+
+          if (
+            (status === 503 ||
+              status === 429) &&
+            attempt < 3
+          ) {
+
+            const delay =
+              attempt * 2000;
+
+
+            console.log(
+              `Gemini temporarily unavailable. Retrying in ${delay}ms...`
+            );
+
+
+            await new Promise(
+              resolve =>
+                setTimeout(
+                  resolve,
+                  delay
+                )
+            );
+
+
+            continue;
+          }
+
+
+          // ----------------------------------------------
+          // Stop for non-retryable errors
+          // ----------------------------------------------
+
+          throw error;
+        }
+      }
+
+
+      // ==================================================
+      // 8. NO GEMINI RESPONSE
+      // ==================================================
+
+      if (!response) {
+
+        throw (
+          lastGeminiError ||
+          new Error(
+            "Gemini API did not return a response"
+          )
+        );
+      }
+
+
+      // ==================================================
+      // 9. CLEAN GEMINI RESPONSE
+      // ==================================================
+
+      const sanitizedJsonText =
+        response.text
+          .replace(
+            /```json/g,
+            ''
+          )
+          .replace(
+            /```/g,
+            ''
+          )
+          .trim();
+
+
+      console.log(
+        'Sanitized JSON:',
+        sanitizedJsonText
+      );
+
+
+      // ==================================================
+      // 10. PARSE JSON
+      // ==================================================
+
+      let resultPayload;
+
+
+      try {
+
+        resultPayload =
+          JSON.parse(
+            sanitizedJsonText
+          );
+
+      } catch (jsonError) {
+
+        console.error(
+          'Gemini returned invalid JSON:',
+          sanitizedJsonText
+        );
+
+        return res.status(422).json({
+          success: false,
+          message:
+            "Gemini returned an invalid weight response.",
+          raw_response:
+            sanitizedJsonText
+        });
+      }
+
+
+      // ==================================================
+      // 11. GET WEIGHT
+      // ==================================================
+
+      const rawText =
+        resultPayload.weight_string;
+
+
+      const totalGrams =
+        parseFloat(
+          resultPayload.numeric_value
+        );
+
+
+      // ==================================================
+      // 12. VALIDATE WEIGHT
+      // ==================================================
+
+      if (
+        isNaN(totalGrams) ||
+        totalGrams <= 0
+      ) {
+
+        return res.status(422).json({
+
+          success: false,
+
+          message:
+            "The AI was unable to isolate numerical weight values from the screen display text matrix."
+
+        });
+      }
+
+
+      // ==================================================
+      // 13. CONVERT GRAMS / MILLIGRAMS
+      // ==================================================
+
+      const gramsBase =
+        Math.floor(
+          totalGrams
+        );
+
+
+      const fractionalPart =
+        (
+          totalGrams -
+          gramsBase
+        ).toFixed(3);
+
+
+      const milligrams =
+        Math.round(
+          parseFloat(
+            fractionalPart
+          ) * 1000
+        );
+
+
+      // ==================================================
+      // 14. INSERT INTO WEIGHT RECORDS
+      // ==================================================
+
+      const insertSql = `
+        INSERT INTO weight_records
+        (
+          raw_text,
+          grams,
+          milligrams,
+          total_grams,
+          image_path,
+          confidence
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+      `;
+
+
+      const [result] =
+        await db.execute(
+          insertSql,
+          [
             rawText,
             gramsBase,
             milligrams,
             totalGrams,
-            milligrams,
-            estimate_number
-          ]);
-          console.log(`✅ Updated estimate ${estimate_number} with weight: ${totalGrams}g (${gramsBase}g ${milligrams}mg)`);
-        } else {
-          console.log(`⚠️ Estimate ${estimate_number} not found, weight saved only to weight_records`);
+            relativeImagePath,
+            100
+          ]
+        );
+
+
+      // ==================================================
+      // 15. UPDATE ESTIMATE
+      // ==================================================
+
+      if (estimate_number) {
+
+        try {
+
+          const [checkResult] =
+            await db.query(
+              `
+              SELECT estimate_id
+              FROM estimate
+              WHERE estimate_number = ?
+              LIMIT 1
+              `,
+              [
+                estimate_number
+              ]
+            );
+
+
+          if (
+            checkResult.length > 0
+          ) {
+
+            const updateSql = `
+              UPDATE estimate
+              SET
+                weight_machine_reading = ?,
+                weight_machine_unit = 'g',
+                weight_machine_raw = ?,
+                weight_machine_grams = ?,
+                weight_machine_milligrams = ?,
+                weight_machine_confidence = 100,
+                total_grams = ?,
+                milligrams = ?,
+                updated_at = NOW()
+              WHERE estimate_number = ?
+            `;
+
+
+            await db.query(
+              updateSql,
+              [
+                totalGrams,
+                rawText,
+                gramsBase,
+                milligrams,
+                totalGrams,
+                milligrams,
+                estimate_number
+              ]
+            );
+
+
+            console.log(
+              `✅ Updated estimate ${estimate_number} with weight: ${totalGrams}g (${gramsBase}g ${milligrams}mg)`
+            );
+
+          } else {
+
+            console.log(
+              `⚠️ Estimate ${estimate_number} not found, weight saved only to weight_records`
+            );
+          }
+
+
+        } catch (updateError) {
+
+          console.error(
+            'Error updating estimate with weight:',
+            updateError
+          );
         }
-      } catch (updateError) {
-        console.error('Error updating estimate with weight:', updateError);
       }
+
+
+      // ==================================================
+      // 16. SUCCESS RESPONSE
+      // ==================================================
+
+      return res.json({
+
+        success: true,
+
+        insertedId:
+          result.insertId,
+
+        record: {
+
+          raw_text:
+            rawText,
+
+          grams:
+            gramsBase,
+
+          milligrams:
+            milligrams,
+
+          total_grams:
+            totalGrams,
+
+          image_path:
+            relativeImagePath,
+
+          confidence:
+            100
+        },
+
+        message:
+          "Weight extracted successfully"
+
+      });
+
+
+    } catch (error) {
+
+      // ==================================================
+      // 17. ERROR HANDLING
+      // ==================================================
+
+      console.error(
+        "Gemini API Weight Extraction Error:",
+        error
+      );
+
+
+      const status =
+        error?.status ||
+        error?.code;
+
+
+      // Temporary Gemini unavailable
+      if (
+        status === 503 ||
+        status === 429
+      ) {
+
+        return res.status(503).json({
+
+          success: false,
+
+          message:
+            "Gemini AI is temporarily unavailable. Please try scanning again after a few seconds.",
+
+          error:
+            error?.message ||
+            "Gemini API temporarily unavailable"
+
+        });
+      }
+
+
+      // Other errors
+      return res.status(500).json({
+
+        success: false,
+
+        message:
+          "System error processing your multi-modal scale tracking pipeline.",
+
+        error:
+          error?.message ||
+          "Unknown error"
+
+      });
+
     }
 
-    res.json({
-      success: true,
-      insertedId: result.insertId,
-      record: {
-        raw_text: rawText,
-        grams: gramsBase,
-        milligrams: milligrams,
-        total_grams: totalGrams,
-        image_path: relativeImagePath,
-        confidence: 100
-      },
-      message: "Weight extracted successfully"
-    });
-
-  } catch (error) {
-    console.error("Gemini API Weight Extraction Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "System error processing your multi-modal scale tracking pipeline.",
-      error: error.message
-    });
   }
-});;
+);
+
 
 // Save weight data to estimate (manual save from frontend)
 router.post("/api/save-weight-gemini", async (req, res) => {
